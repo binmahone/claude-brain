@@ -151,10 +151,10 @@ build_snapshot() {
       done | jq -s 'add // {}')
   fi
 
-  # Environmental: settings (strip env vars AND mcpServers — MCP exported separately)
+  # Environmental: settings (strip env vars — mcpServers live in ~/.claude.json, not here)
   local settings="null"
   if [ -f "${CLAUDE_DIR}/settings.json" ]; then
-    settings=$(jq 'del(.env) | del(.mcpServers)' "${CLAUDE_DIR}/settings.json")
+    settings=$(jq 'del(.env)' "${CLAUDE_DIR}/settings.json")
   fi
 
   local settings_hash="null"
@@ -170,16 +170,18 @@ build_snapshot() {
     keybindings_hash=$(file_hash "${CLAUDE_DIR}/keybindings.json")
   fi
 
-  # Environmental: MCP servers (from settings.json mcpServers field)
+  # Environmental: MCP servers (from ~/.claude.json, NOT settings.json)
+  # Claude Code stores mcpServers in ~/.claude.json (CLAUDE_JSON),
+  # while settings.json only contains MCP policy fields.
   # SECURITY: Strip env fields from each server config (may contain API keys/tokens)
   local mcp_servers="{}"
-  if [ -f "${CLAUDE_DIR}/settings.json" ]; then
+  if [ -f "${CLAUDE_JSON}" ]; then
     mcp_servers=$(jq '
       .mcpServers // {} |
       to_entries |
       map(.value = (.value | del(.env))) |
       from_entries
-    ' "${CLAUDE_DIR}/settings.json" 2>/dev/null || echo "{}")
+    ' "${CLAUDE_JSON}" 2>/dev/null || echo "{}")
     # Rewrite absolute home paths to ${HOME}
     mcp_servers=$(echo "$mcp_servers" | sed "s|${HOME}|\${HOME}|g")
   fi
