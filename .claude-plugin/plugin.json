@@ -9,5 +9,20 @@
   "homepage": "https://github.com/toroleapinc/claude-brain",
   "repository": "https://github.com/toroleapinc/claude-brain",
   "license": "MIT",
-  "keywords": ["sync", "memory", "brain", "multi-machine", "merge", "productivity", "dotfiles", "cross-device"]
+  "keywords": ["sync", "memory", "brain", "multi-machine", "merge", "productivity", "dotfiles", "cross-device"],
+  "skills": [
+    "./skills/brain-init",
+    "./skills/brain-join",
+    "./skills/brain-sync",
+    "./skills/brain-status",
+    "./skills/brain-evolve",
+    "./skills/brain-conflicts",
+    "./skills/brain-share",
+    "./skills/brain-shared-list",
+    "./skills/brain-log"
+  ],
+  "agents": [
+    "./agents/brain-merge.md"
+  ],
+  "hooks": "./hooks/hooks.json"
 }
