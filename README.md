@@ -22,11 +22,29 @@
 
 ---
 
+```
+# Machine A (work laptop) — first time setup
+> /brain-init git@github.com:you/my-brain.git
+✓ Brain exported: 42 memory entries, 3 skills, 5 rules
+✓ Pushed to remote
+
+# Machine B (home desktop) — join existing brain
+> /brain-join git@github.com:you/my-brain.git
+✓ Pulled brain: 42 memory entries, 3 skills, 5 rules
+✓ Merged with local state
+✓ Auto-sync enabled
+
+# Later... check sync status from any machine
+> /brain-status
+=== Claude Brain Status ===
+Machine: home-desktop (b7f2...)
+Remote:  git@github.com:you/my-brain.git
+Last push: 2 minutes ago
+Last pull: 2 minutes ago
+Status:  Clean
+```
+
 <p align="center">
-  <a href="https://asciinema.org/a/FS5qulEb6cUJDFzC" target="_blank">
-    <img src="https://asciinema.org/a/FS5qulEb6cUJDFzC.svg" alt="claude-brain demo" width="700">
-  </a>
-  <br>
   <em>Two commands. Zero daily effort. Works forever.</em>
 </p>
 
