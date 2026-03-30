@@ -210,7 +210,8 @@ import_brain() {
       import_dir_entries "${CLAUDE_DIR}/agent-memory/${agent}" "$entries"
     done
 
-  # Environmental: settings (deep merge, preserve local env AND local mcpServers)
+  # Environmental: settings (deep merge, preserve local env)
+  # Note: mcpServers are NOT in settings.json — they live in ~/.claude.json (CLAUDE_JSON)
     local new_settings
     new_settings=$(echo "$brain" | jq '.environmental.settings.content // null')
     if [ "$new_settings" != "null" ] && [ -f "${CLAUDE_DIR}/settings.json" ]; then
@@ -218,19 +219,50 @@ import_brain() {
       tmp=$(brain_mktemp)
       tmp_remote=$(brain_mktemp)
       printf '%s\n' "$new_settings" > "$tmp_remote"
-      # Merge: keep local env and mcpServers, merge everything else from consolidated
+      # Merge: keep local env, merge everything else from consolidated
+      # Note: mcpServers are NOT in settings.json — they live in ~/.claude.json (CLAUDE_JSON)
       jq -s '.[0] as $local | .[1] as $remote |
         ($local.env // {}) as $local_env |
-        ($local.mcpServers // {}) as $local_mcp |
-        ($remote // {}) * $local | .env = $local_env | .mcpServers = $local_mcp' \
+        ($remote // {}) * $local | .env = $local_env' \
         "${CLAUDE_DIR}/settings.json" "$tmp_remote" > "$tmp"
       mv "$tmp" "${CLAUDE_DIR}/settings.json"
       chmod 600 "${CLAUDE_DIR}/settings.json"
-      log_info "Updated: settings.json (merged, local env and mcpServers preserved)"
+      log_info "Updated: settings.json (merged, local env preserved)"
     elif [ "$new_settings" != "null" ] && [ ! -f "${CLAUDE_DIR}/settings.json" ]; then
       echo "$new_settings" > "${CLAUDE_DIR}/settings.json"
       chmod 600 "${CLAUDE_DIR}/settings.json"
       log_info "Created: settings.json"
+    fi
+
+  # Environmental: MCP servers (merge into ~/.claude.json, preserve local env)
+  # Claude Code stores mcpServers in ~/.claude.json (CLAUDE_JSON), not settings.json.
+  # Expand ${HOME} placeholders back to actual paths before writing.
+    local new_mcp_servers
+    new_mcp_servers=$(echo "$brain" | jq '.environmental.mcp_servers // {}')
+    if [ "$new_mcp_servers" != "{}" ] && [ "$new_mcp_servers" != "null" ]; then
+      # Expand ${HOME} placeholders to actual HOME path
+      new_mcp_servers=$(echo "$new_mcp_servers" | sed "s|\\\${HOME}|${HOME}|g")
+      if [ -f "${CLAUDE_JSON}" ]; then
+        local tmp
+        tmp=$(brain_mktemp)
+        # Merge: combine remote MCP servers with local ones (local takes precedence),
+        # preserve all other fields in ~/.claude.json including local env vars
+        local tmp_mcp
+        tmp_mcp=$(brain_mktemp)
+        printf '%s\n' "$new_mcp_servers" > "$tmp_mcp"
+        jq -s '.[0] as $local | .[1] as $remote_mcp |
+          ($local.mcpServers // {}) as $local_mcp |
+          $local | .mcpServers = ($remote_mcp * $local_mcp)' \
+          "${CLAUDE_JSON}" "$tmp_mcp" > "$tmp"
+        mv "$tmp" "${CLAUDE_JSON}"
+        chmod 600 "${CLAUDE_JSON}"
+        log_info "Updated: ~/.claude.json (MCP servers merged, local overrides preserved)"
+      else
+        # Create ~/.claude.json with just mcpServers
+        jq -n --argjson mcp "$new_mcp_servers" '{"mcpServers": $mcp}' > "${CLAUDE_JSON}"
+        chmod 600 "${CLAUDE_JSON}"
+        log_info "Created: ~/.claude.json with MCP servers"
+      fi
     fi
 
   # Environmental: keybindings (union)
