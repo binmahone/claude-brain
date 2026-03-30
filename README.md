@@ -86,7 +86,7 @@ Two commands. Zero daily effort. Works forever.
 ```bash
 # Add the marketplace and install
 /plugin marketplace add toroleapinc/claude-brain
-/plugin install claude-brain
+/plugin install claude-brain-sync
 ```
 
 ### Initialize (first machine)
