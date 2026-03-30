@@ -44,14 +44,14 @@ file_entry() {
 # ── Helper: scan directory for files ───────────────────────────────────────────
 scan_dir_entries() {
   local dir="$1"
-  local result="{}"
 
   if [ ! -d "$dir" ]; then
     echo "{}"
     return
   fi
 
-    result=$(find "$dir" -type f -name "*.md" 2>/dev/null | sort | while read -r f; do
+    local scan_result
+    scan_result=$(find "$dir" -type f 2>/dev/null | sort | while read -r f; do
       # Size guard per file
       if ! check_file_size "$f" 2>/dev/null; then
         continue
@@ -65,7 +65,7 @@ scan_dir_entries() {
       jq -Rs --arg key "$relpath" --arg hash "sha256:${hash}" \
         '{($key): {"content": ., "hash": $hash}}' < "$f"
     done | jq -s 'add // {}')
-  echo "$result"
+  echo "$scan_result"
 }
 
 # ── Build snapshot ─────────────────────────────────────────────────────────────
@@ -79,44 +79,47 @@ build_snapshot() {
 
   # Declarative
   local claude_md="null"
-  if [ -f "${CLAUDE_DIR}/CLAUDE.md" ]; then
-    claude_md=$(file_entry "${CLAUDE_DIR}/CLAUDE.md")
-  fi
-
   local rules="{}"
-  if [ -d "${CLAUDE_DIR}/rules" ]; then
-    rules=$(scan_dir_entries "${CLAUDE_DIR}/rules")
-  fi
-
   # Procedural
   local skills="{}"
-  if [ -d "${CLAUDE_DIR}/skills" ]; then
-    skills=$(scan_dir_entries "${CLAUDE_DIR}/skills")
-  fi
-
   local agents="{}"
-  if [ -d "${CLAUDE_DIR}/agents" ]; then
-    agents=$(scan_dir_entries "${CLAUDE_DIR}/agents")
-  fi
-
   local output_styles="{}"
-  if [ -d "${CLAUDE_DIR}/output-styles" ]; then
-    output_styles=$(scan_dir_entries "${CLAUDE_DIR}/output-styles")
-  fi
-
-  # Shared namespace (only if brain repo exists)
+  # Shared namespace
   local shared_skills="{}"
   local shared_agents="{}"
   local shared_rules="{}"
-  if [ -d "${BRAIN_REPO}/shared" ]; then
-    if [ -d "${BRAIN_REPO}/shared/skills" ]; then
-      shared_skills=$(scan_dir_entries "${BRAIN_REPO}/shared/skills")
+
+  if ! $MEMORY_ONLY; then
+    if [ -f "${CLAUDE_DIR}/CLAUDE.md" ]; then
+      claude_md=$(file_entry "${CLAUDE_DIR}/CLAUDE.md")
     fi
-    if [ -d "${BRAIN_REPO}/shared/agents" ]; then
-      shared_agents=$(scan_dir_entries "${BRAIN_REPO}/shared/agents")
+
+    if [ -d "${CLAUDE_DIR}/rules" ]; then
+      rules=$(scan_dir_entries "${CLAUDE_DIR}/rules")
     fi
-    if [ -d "${BRAIN_REPO}/shared/rules" ]; then
-      shared_rules=$(scan_dir_entries "${BRAIN_REPO}/shared/rules")
+
+    if [ -d "${CLAUDE_DIR}/skills" ]; then
+      skills=$(scan_dir_entries "${CLAUDE_DIR}/skills")
+    fi
+
+    if [ -d "${CLAUDE_DIR}/agents" ]; then
+      agents=$(scan_dir_entries "${CLAUDE_DIR}/agents")
+    fi
+
+    if [ -d "${CLAUDE_DIR}/output-styles" ]; then
+      output_styles=$(scan_dir_entries "${CLAUDE_DIR}/output-styles")
+    fi
+
+    if [ -d "${BRAIN_REPO}/shared" ]; then
+      if [ -d "${BRAIN_REPO}/shared/skills" ]; then
+        shared_skills=$(scan_dir_entries "${BRAIN_REPO}/shared/skills")
+      fi
+      if [ -d "${BRAIN_REPO}/shared/agents" ]; then
+        shared_agents=$(scan_dir_entries "${BRAIN_REPO}/shared/agents")
+      fi
+      if [ -d "${BRAIN_REPO}/shared/rules" ]; then
+        shared_rules=$(scan_dir_entries "${BRAIN_REPO}/shared/rules")
+      fi
     fi
   fi
 
@@ -153,7 +156,7 @@ build_snapshot() {
 
   # Environmental: settings (strip env vars — mcpServers live in ~/.claude.json, not here)
   local settings="null"
-  if [ -f "${CLAUDE_DIR}/settings.json" ]; then
+  if ! $MEMORY_ONLY && [ -f "${CLAUDE_DIR}/settings.json" ]; then
     settings=$(jq 'del(.env)' "${CLAUDE_DIR}/settings.json")
   fi
 
@@ -165,7 +168,7 @@ build_snapshot() {
   # Environmental: keybindings
   local keybindings="null"
   local keybindings_hash="null"
-  if [ -f "${CLAUDE_DIR}/keybindings.json" ]; then
+  if ! $MEMORY_ONLY && [ -f "${CLAUDE_DIR}/keybindings.json" ]; then
     keybindings=$(cat "${CLAUDE_DIR}/keybindings.json")
     keybindings_hash=$(file_hash "${CLAUDE_DIR}/keybindings.json")
   fi
@@ -175,7 +178,7 @@ build_snapshot() {
   # while settings.json only contains MCP policy fields.
   # SECURITY: Strip env fields from each server config (may contain API keys/tokens)
   local mcp_servers="{}"
-  if [ -f "${CLAUDE_JSON}" ]; then
+  if ! $MEMORY_ONLY && [ -f "${CLAUDE_JSON}" ]; then
     mcp_servers=$(jq '
       .mcpServers // {} |
       to_entries |
