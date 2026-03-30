@@ -6,13 +6,11 @@ source "${SCRIPT_DIR}/common.sh"
 
 QUIET=false
 AUTO_MERGE=false
-DRY_RUN=false
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --quiet) QUIET=true; BRAIN_QUIET=true; shift ;;
     --auto-merge) AUTO_MERGE=true; shift ;;
-    --dry-run) DRY_RUN=true; shift ;;
     *) shift ;;
   esac
 done
@@ -56,11 +54,10 @@ decrypted_snapshots=()
 
 for snapshot_file in "${BRAIN_REPO}"/machines/*/brain-snapshot.json; do
   if [ -f "$snapshot_file" ]; then
-    # Check if snapshot is encrypted
-    if is_encrypted_content "$(cat "$snapshot_file")"; then
+    # Check if snapshot is encrypted (only read first line)
+    if head -1 "$snapshot_file" | grep -q "^-----BEGIN AGE ENCRYPTED FILE-----"; then
       if encryption_enabled && command -v age &>/dev/null; then
         # Decrypt to temp file
-        local decrypted_tmp
         decrypted_tmp=$(brain_mktemp)
         if decrypt_file "$snapshot_file" "$decrypted_tmp"; then
           snapshots+=("$decrypted_tmp")
@@ -105,15 +102,17 @@ else
   done
 
   # Now run N-way semantic merge on all snapshots at once
-  "${SCRIPT_DIR}/merge-semantic.sh" \
+  if "${SCRIPT_DIR}/merge-semantic.sh" \
     "${BRAIN_REPO}/consolidated/brain.json" \
-    "${snapshots[@]}" || {
+    "${snapshots[@]}"; then
+    # Semantic merge succeeded — its output is brain.json; discard structured fallback
+    rm -f "${BRAIN_REPO}/consolidated/brain.json.merging"
+  else
     log_warn "Semantic merge failed. Using structured merge only."
-  }
-  
-  # Use the structurally merged version if semantic merge failed
-  if [ -f "${BRAIN_REPO}/consolidated/brain.json.merging" ]; then
-    mv "${BRAIN_REPO}/consolidated/brain.json.merging" "${BRAIN_REPO}/consolidated/brain.json"
+    # Fall back to the structurally merged version
+    if [ -f "${BRAIN_REPO}/consolidated/brain.json.merging" ]; then
+      mv "${BRAIN_REPO}/consolidated/brain.json.merging" "${BRAIN_REPO}/consolidated/brain.json"
+    fi
   fi
 fi
 

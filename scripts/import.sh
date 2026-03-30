@@ -52,14 +52,20 @@ import_dir_entries() {
     return 0
   fi
 
-  # Resolve base_dir to absolute path for traversal check
+  # Resolve base_dir to absolute path for traversal check (pipe through stdin to avoid injection)
   local resolved_base
-  resolved_base=$(python3 -c "import os; print(os.path.realpath('$base_dir'))" 2>/dev/null || realpath "$base_dir" 2>/dev/null || echo "$base_dir")
+  resolved_base=$(echo "$base_dir" | python3 -c "import os,sys; print(os.path.realpath(sys.stdin.read().strip()))" 2>/dev/null || realpath "$base_dir" 2>/dev/null || echo "$base_dir")
 
     echo "$json_entries" | jq -r 'keys[]' | while read -r key; do
+      # Pure-bash path traversal guard: reject keys containing '..' components
+      if echo "$key" | grep -qE '(^|/)\.\.(/|$)'; then
+        log_warn "BLOCKED path traversal: $key"
+        continue
+      fi
+
       # PATH TRAVERSAL CHECK: ensure key doesn't escape base_dir
       local resolved_target
-      resolved_target=$(python3 -c "import os; print(os.path.realpath('${resolved_base}/${key}'))" 2>/dev/null || realpath "${resolved_base}/${key}" 2>/dev/null || echo "${resolved_base}/${key}")
+      resolved_target=$(echo "$resolved_base/$key" | python3 -c "import os,sys; print(os.path.realpath(sys.stdin.read().strip()))" 2>/dev/null || realpath "${resolved_base}/${key}" 2>/dev/null || echo "${resolved_base}/${key}")
       if [[ "$resolved_target" != "${resolved_base}/"* ]]; then
         log_warn "BLOCKED path traversal attempt: ${key} (would write outside ${base_dir})"
         continue
