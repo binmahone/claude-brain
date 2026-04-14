@@ -124,15 +124,32 @@ The Git remote URL is provided as: $ARGUMENTS
    - **Overwrite**: Replace local with consolidated brain
    - **Keep local**: Keep local as-is, only add new items from consolidated
 
-10. Based on choice:
-    - **Merge**: Run merge-structured.sh then merge-semantic.sh between local snapshot and consolidated
-    - **Overwrite**: Run import.sh directly with consolidated brain
+10. Based on choice, apply consolidated brain to local machine:
+    - **Merge** (recommended): Use merge-structured.sh to merge consolidated brain WITH local snapshot,
+      then apply the result locally via import.sh. The consolidated/brain.json is NOT modified —
+      only the local Claude files are updated.
+      ```bash
+      MERGED_OUTPUT=$(mktemp)
+      bash "${CLAUDE_PLUGIN_ROOT}/scripts/merge-structured.sh" \
+        ~/.claude/brain-repo/consolidated/brain.json \
+        ~/.claude/brain-repo/machines/${MACHINE_ID}/brain-snapshot.json \
+        "$MERGED_OUTPUT"
+      bash "${CLAUDE_PLUGIN_ROOT}/scripts/merge-semantic.sh" \
+        "$MERGED_OUTPUT" \
+        ~/.claude/brain-repo/machines/${MACHINE_ID}/brain-snapshot.json
+      bash "${CLAUDE_PLUGIN_ROOT}/scripts/import.sh" "$MERGED_OUTPUT"
+      rm -f "$MERGED_OUTPUT"
+      ```
+    - **Overwrite**: Run import.sh directly with consolidated brain (do NOT write back to consolidated/brain.json)
+      ```bash
+      bash "${CLAUDE_PLUGIN_ROOT}/scripts/import.sh" ~/.claude/brain-repo/consolidated/brain.json
+      ```
     - **Keep local**: Run import.sh but skip files that already exist locally
 
-11. Push the updated state:
+11. Push the updated state (machines and meta ONLY — never commit consolidated/ during join):
     ```bash
     cd ~/.claude/brain-repo
-    git add machines/ consolidated/ meta/
+    git add machines/ meta/
     git commit -m "Join: $(hostname) joined brain network"
     git push origin main
     ```
