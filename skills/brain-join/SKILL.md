@@ -112,11 +112,16 @@ The Git remote URL is provided as: $ARGUMENTS
    fi
    ```
 
-8. Show what's in the consolidated brain vs what's local. Run export first:
+8. Export local snapshot and commit it to git immediately (before import runs),
+   so that the current local state is preserved in git history before anything is overwritten:
    ```bash
    MACHINE_ID=$(cat ~/.claude/brain-config.json | jq -r '.machine_id')
    mkdir -p ~/.claude/brain-repo/machines/${MACHINE_ID}
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/export.sh" --output ~/.claude/brain-repo/machines/${MACHINE_ID}/brain-snapshot.json
+
+   cd ~/.claude/brain-repo
+   git add machines/
+   git commit -m "Join: $(hostname) snapshot before import"
    ```
 
 9. Re-consolidate: now that the new machine's snapshot is in machines/, re-run the full
