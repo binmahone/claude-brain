@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+# sync.sh — Pull latest from remote, merge locally, then push consolidated result
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/common.sh"
+
+QUIET=false
+AUTO_MERGE=false
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --quiet) QUIET=true; BRAIN_QUIET=true; shift ;;
+    --auto-merge) AUTO_MERGE=true; shift ;;
+    *) shift ;;
+  esac
+done
+
+check_dependencies
+load_config
+
+machine_id=$(get_config "machine_id")
+
+# Pull --rebase: sync with remote before pushing
+# This ensures our locally committed snapshot won't conflict with other machines' pushes.
+# We pull AFTER snapshot.sh has committed our snapshot locally, so our commit is rebased
+# on top of the remote's latest — other machines' snapshots won't overwrite ours.
+brain_git pull --rebase origin main 2>/dev/null || {
+  brain_git rebase --abort 2>/dev/null || true
+  log_warn "Could not sync with remote. Working offline."
+  exit 0
+}
+
+# Check if consolidated brain has changed
+local_consolidated_hash=""
+if [ -f "${BRAIN_REPO}/consolidated/brain.json" ]; then
+  local_consolidated_hash=$(file_hash "${BRAIN_REPO}/consolidated/brain.json")
+fi
+
+# Collect all machine snapshots (decrypt if needed)
+snapshot_count=0
+snapshots=()
+decrypted_snapshots=()
+
+for snapshot_file in "${BRAIN_REPO}"/machines/*/brain-snapshot.json; do
+  if [ -f "$snapshot_file" ]; then
+    # Check if snapshot is encrypted (only read first line)
+    if head -1 "$snapshot_file" | grep -q "^-----BEGIN AGE ENCRYPTED FILE-----"; then
+      if encryption_enabled && command -v age &>/dev/null; then
+        # Decrypt to temp file
+        decrypted_tmp=$(brain_mktemp)
+        if decrypt_file "$snapshot_file" "$decrypted_tmp"; then
+          snapshots+=("$decrypted_tmp")
+          decrypted_snapshots+=("$decrypted_tmp")
+          snapshot_count=$((snapshot_count + 1))
+        else
+          log_warn "Failed to decrypt snapshot: $snapshot_file"
+        fi
+      else
+        log_warn "Encrypted snapshot found but encryption not configured: $snapshot_file"
+      fi
+    else
+      # Unencrypted snapshot
+      snapshots+=("$snapshot_file")
+      snapshot_count=$((snapshot_count + 1))
+    fi
+  fi
+done
+
+if [ "$snapshot_count" -eq 0 ]; then
+  log_info "No machine snapshots found."
+  exit 0
+fi
+
+mkdir -p "${BRAIN_REPO}/consolidated"
+
+if [ "$snapshot_count" -eq 1 ]; then
+  # Only one machine — its snapshot IS the consolidated brain
+  cp "${snapshots[0]}" "${BRAIN_REPO}/consolidated/brain.json"
+else
+  # Multiple machines — N-way merge 
+  log_info "Merging snapshots from ${snapshot_count} machines..."
+
+  # Use merge-structured.sh for pairwise structured merge
+  # Use a temp file per step to avoid BASE=OUTPUT truncation (shell truncates
+  # the output file before jq opens the input when they share the same path)
+  merge_tmp=$(brain_mktemp)
+  cp "${snapshots[0]}" "$merge_tmp"
+
+  for ((i=1; i<${#snapshots[@]}; i++)); do
+    step_tmp=$(brain_mktemp)
+    "${SCRIPT_DIR}/merge-structured.sh" \
+      "$merge_tmp" \
+      "${snapshots[i]}" \
+      "$step_tmp"
+    mv "$step_tmp" "$merge_tmp"
+  done
+  cp "$merge_tmp" "${BRAIN_REPO}/consolidated/brain.json.merging"
+  rm -f "$merge_tmp"
+
+  # Now run N-way semantic merge on all snapshots at once
+  if "${SCRIPT_DIR}/merge-semantic.sh" \
+    "${BRAIN_REPO}/consolidated/brain.json" \
+    "${snapshots[@]}"; then
+    # Semantic merge succeeded — its output is brain.json; discard structured fallback
+    rm -f "${BRAIN_REPO}/consolidated/brain.json.merging"
+  else
+    log_warn "Semantic merge failed. Using structured merge only."
+    # Fall back to the structurally merged version
+    if [ -f "${BRAIN_REPO}/consolidated/brain.json.merging" ]; then
+      mv "${BRAIN_REPO}/consolidated/brain.json.merging" "${BRAIN_REPO}/consolidated/brain.json"
+    fi
+  fi
+fi
+
+# Apply consolidated brain locally (with validation and backup)
+"${SCRIPT_DIR}/import.sh" "${BRAIN_REPO}/consolidated/brain.json"
+
+# Commit consolidated and push everything once (snapshot commit from snapshot.sh + consolidated)
+brain_git add consolidated/ meta/
+brain_git diff --cached --quiet 2>/dev/null || \
+  brain_git commit -m "Consolidated: $(get_machine_name) merged at $(now_iso)" 2>/dev/null || true
+
+if brain_push_with_retry 3 2; then
+  local_tmp=$(brain_mktemp)
+  jq --arg ts "$(now_iso)" '.last_pull = $ts | .dirty = false' "$BRAIN_CONFIG" > "$local_tmp"
+  mv "$local_tmp" "$BRAIN_CONFIG"
+  log_info "Brain pushed."
+else
+  local_tmp=$(brain_mktemp)
+  jq --arg ts "$(now_iso)" '.last_pull = $ts | .dirty = true' "$BRAIN_CONFIG" > "$local_tmp"
+  mv "$local_tmp" "$BRAIN_CONFIG"
+  log_warn "Push failed. Will retry next session."
+fi
+
+# Check if auto-evolve is due
+if [ -f "$DEFAULTS_FILE" ]; then
+  evolve_interval_days="" last_evolved="" days_since_evolve=""
+  evolve_interval_days=$(jq -r '.evolve_interval_days // 7' "$DEFAULTS_FILE")
+  last_evolved=$(jq -r '.last_evolved // null' "$BRAIN_CONFIG")
+  
+  if [ "$last_evolved" = "null" ] || [ -z "$last_evolved" ]; then
+    # Never evolved, set to now to start the timer
+    local_tmp=$(brain_mktemp)
+    jq --arg ts "$(now_iso)" '.last_evolved = $ts' "$BRAIN_CONFIG" > "$local_tmp"
+    mv "$local_tmp" "$BRAIN_CONFIG"
+  else
+    # Calculate days since last evolution
+    if command -v date &>/dev/null; then
+      last_evolved_ts="" current_ts=""
+      last_evolved_ts=$(date -d "$last_evolved" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%SZ" "$last_evolved" +%s 2>/dev/null || echo "0")
+      current_ts=$(date +%s)
+      days_since_evolve=$(( (current_ts - last_evolved_ts) / 86400 ))
+      
+      if [ "$days_since_evolve" -ge "$evolve_interval_days" ]; then
+        log_info "Auto-evolve due (${days_since_evolve} days since last evolution)..."
+        "${SCRIPT_DIR}/evolve.sh" --auto 2>/dev/null || {
+          log_warn "Auto-evolve failed. Run /brain-evolve manually."
+        }
+      fi
+    fi
+  fi
+fi
+
+# Log the merge
+new_consolidated_hash=$(file_hash "${BRAIN_REPO}/consolidated/brain.json")
+if [ "$local_consolidated_hash" != "$new_consolidated_hash" ]; then
+  append_merge_log "pull+merge" "Merged ${snapshot_count} machine snapshots"
+  log_info "Brain synced: merged ${snapshot_count} machine(s)."
+else
+  log_info "Brain synced: no changes."
+fi

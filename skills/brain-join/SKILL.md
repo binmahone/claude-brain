@@ -130,7 +130,7 @@ The Git remote URL is provided as: $ARGUMENTS
    ```
 
 9. Re-consolidate: now that the new machine's snapshot is in machines/, re-run the full
-   N-way merge across ALL machine snapshots (same logic as pull.sh) to produce a fresh
+   N-way merge across ALL machine snapshots (same logic as sync.sh) to produce a fresh
    consolidated brain, then import it locally:
    ```bash
    snapshots=()

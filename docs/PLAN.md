@@ -61,7 +61,7 @@
 
 ## Phase 2: Git Operations (Push/Pull)
 
-### 2.1 push.sh — Push snapshot to remote
+### 2.1 snapshot.sh — Push snapshot to remote
 - Check brain-config.json exists (initialized?)
 - Run export.sh to create fresh snapshot
 - Compare hash with last pushed hash (skip if identical)
@@ -71,7 +71,7 @@
 - Update brain-config.json (last_push timestamp)
 - Flags: --quiet (suppress output), --force (push even if unchanged)
 
-### 2.2 pull.sh — Pull + merge
+### 2.2 sync.sh — Pull + merge
 - Check brain-config.json exists
 - Git fetch + pull in brain-repo
 - Read all machine snapshots from machines/*/brain-snapshot.json
@@ -178,8 +178,8 @@
 ## Phase 5: Hooks + Agent
 
 ### 5.1 hooks/hooks.json
-- SessionStart (startup|resume): pull.sh --quiet --auto-merge (async)
-- SessionEnd (prompt_input_exit|logout): export.sh + push.sh --quiet (async)
+- SessionStart (startup|resume): sync.sh --quiet --auto-merge (async)
+- SessionEnd (prompt_input_exit|logout): export.sh + snapshot.sh --quiet (async)
 - PreCompact (auto): export.sh --memory-only --quiet (async)
 
 ### 5.2 agents/brain-merge.md

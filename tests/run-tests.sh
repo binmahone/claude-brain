@@ -494,7 +494,7 @@ touch "$HOME/.claude/evolve-triggered"
 MOCK
   chmod +x "$real_evolve"
 
-  # Create a machine snapshot so pull.sh has something to work with
+  # Create a machine snapshot so sync.sh has something to work with
   local machine_id
   machine_id=$(jqr ".machine_id" "$BRAIN_CONFIG")
   mkdir -p "$BRAIN_REPO/machines/$machine_id"
@@ -503,13 +503,13 @@ MOCK
 
   (cd "$BRAIN_REPO" && git add -A && git commit -q -m "test snapshot" 2>/dev/null || true)
 
-  # Set up a local bare remote so pull.sh can fetch
+  # Set up a local bare remote so sync.sh can fetch
   local bare_remote="$TEST_DIR/remote.git"
   git clone --bare "$BRAIN_REPO" "$bare_remote" 2>/dev/null || true
   (cd "$BRAIN_REPO" && git remote remove origin 2>/dev/null || true && git remote add origin "$bare_remote")
 
-  # Run pull.sh
-  bash "$PROJECT_DIR/scripts/pull.sh" --quiet 2>/dev/null || true
+  # Run sync.sh
+  bash "$PROJECT_DIR/scripts/sync.sh" --quiet 2>/dev/null || true
 
   # Restore real evolve.sh
   cp "$backup_evolve" "$real_evolve"
@@ -534,7 +534,7 @@ touch "$HOME/.claude/evolve-triggered"
 MOCK
   chmod +x "$real_evolve"
 
-  bash "$PROJECT_DIR/scripts/pull.sh" --quiet 2>/dev/null || true
+  bash "$PROJECT_DIR/scripts/sync.sh" --quiet 2>/dev/null || true
 
   cp "$backup_evolve" "$real_evolve"
 
@@ -730,17 +730,17 @@ EOF
   done
 
   # The real merge scripts may not work without full context, so we verify
-  # the code structure by checking pull.sh contains the fix pattern
-  if grep -q 'rm -f.*brain.json.merging' "$PROJECT_DIR/scripts/pull.sh"; then
-    pass "pull.sh cleans up .merging on semantic merge success"
+  # the code structure by checking sync.sh contains the fix pattern
+  if grep -q 'rm -f.*brain.json.merging' "$PROJECT_DIR/scripts/sync.sh"; then
+    pass "sync.sh cleans up .merging on semantic merge success"
   else
-    fail "pull.sh does not clean up .merging on semantic merge success"
+    fail "sync.sh does not clean up .merging on semantic merge success"
   fi
 
-  if grep -q 'Semantic merge failed.*structured merge only' "$PROJECT_DIR/scripts/pull.sh"; then
-    pass "pull.sh falls back to structured merge on semantic failure"
+  if grep -q 'Semantic merge failed.*structured merge only' "$PROJECT_DIR/scripts/sync.sh"; then
+    pass "sync.sh falls back to structured merge on semantic failure"
   else
-    fail "pull.sh missing structured merge fallback"
+    fail "sync.sh missing structured merge fallback"
   fi
 }
 
@@ -764,7 +764,7 @@ test_register_machine_preserves_timestamps() {
   json_set "$BRAIN_CONFIG" "last_pull" "$known_pull"
   json_set "$BRAIN_CONFIG" "last_evolved" "$known_evolved"
 
-  # Re-register (simulates what push.sh does mid-run to update machines.json)
+  # Re-register (simulates what snapshot.sh does mid-run to update machines.json)
   bash "$PROJECT_DIR/scripts/register-machine.sh" "git@github.com:test/test.git" 2>/dev/null || true
 
   local actual_push actual_pull actual_evolved

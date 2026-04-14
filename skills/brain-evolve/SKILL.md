@@ -39,7 +39,7 @@ The user wants to evolve their brain by promoting stable patterns from memory.
 
 5. After all changes are applied:
    ```bash
-   bash "${CLAUDE_PLUGIN_ROOT}/scripts/push.sh"
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/snapshot.sh"
    ```
 
 6. Show summary: "Brain evolved: X promotions accepted, Y stale entries archived."

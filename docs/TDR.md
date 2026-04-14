@@ -132,8 +132,8 @@ claude-brain/
 │   ├── common.sh                   ← Shared utilities (paths, config loading)
 │   ├── export.sh                   ← Serialize brain to JSON snapshot
 │   ├── import.sh                   ← Apply consolidated brain locally
-│   ├── push.sh                     ← Push snapshot to Git remote
-│   ├── pull.sh                     ← Pull + trigger merge
+│   ├── snapshot.sh                     ← Push snapshot to Git remote
+│   ├── sync.sh                     ← Pull + trigger merge
 │   ├── merge-structured.sh         ← Deterministic JSON merge
 │   ├── merge-semantic.sh           ← LLM merge via claude -p
 │   ├── status.sh                   ← Inventory local brain state
@@ -326,7 +326,7 @@ User: /brain-join git@github.com:user/my-brain.git
 
 ```
 SessionStart:
-  1. pull.sh: git fetch in brain-repo
+  1. sync.sh: git fetch in brain-repo
   2. Compare local snapshot hash vs latest consolidated hash
   3. If different: run merge, apply changes
   4. Log sync event
@@ -334,7 +334,7 @@ SessionStart:
 SessionEnd:
   1. export.sh: create fresh brain snapshot
   2. Compare with last pushed snapshot (hash check)
-  3. If changed: push.sh → commit + push new snapshot
+  3. If changed: snapshot.sh → commit + push new snapshot
   4. Log sync event
 ```
 

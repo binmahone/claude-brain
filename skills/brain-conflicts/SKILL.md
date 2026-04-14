@@ -36,7 +36,7 @@ The user wants to resolve pending brain merge conflicts.
 
 6. After all conflicts are resolved:
    ```bash
-   bash "${CLAUDE_PLUGIN_ROOT}/scripts/push.sh"
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/snapshot.sh"
    ```
 
 7. Show summary: "X conflicts resolved. Brain is now fully synced."

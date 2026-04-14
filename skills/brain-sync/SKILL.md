@@ -18,12 +18,12 @@ The user wants to manually trigger a full brain sync cycle.
 
 2. Push local changes:
    ```bash
-   bash "${CLAUDE_PLUGIN_ROOT}/scripts/push.sh"
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/snapshot.sh"
    ```
 
 3. Pull and merge remote changes:
    ```bash
-   bash "${CLAUDE_PLUGIN_ROOT}/scripts/pull.sh" --auto-merge
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/sync.sh" --auto-merge
    ```
 
 4. Show the sync result summary. Check:

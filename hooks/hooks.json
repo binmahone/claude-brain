@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if [ -f \"${HOME}/.claude/brain-config.json\" ]; then bash \"${CLAUDE_PLUGIN_ROOT}/scripts/pull.sh\" --quiet --auto-merge; fi",
+            "command": "if [ -f \"${HOME}/.claude/brain-config.json\" ]; then bash \"${CLAUDE_PLUGIN_ROOT}/scripts/sync.sh\" --quiet --auto-merge; fi",
             "timeout": 30,
             "async": true,
             "statusMessage": "Syncing brain..."
@@ -20,7 +20,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if [ -f \"${HOME}/.claude/brain-config.json\" ]; then bash \"${CLAUDE_PLUGIN_ROOT}/scripts/push.sh\" --quiet || true; fi",
+            "command": "if [ -f \"${HOME}/.claude/brain-config.json\" ]; then bash \"${CLAUDE_PLUGIN_ROOT}/scripts/snapshot.sh\" --quiet || true; fi",
             "timeout": 15,
             "async": true,
             "statusMessage": "Saving brain..."
