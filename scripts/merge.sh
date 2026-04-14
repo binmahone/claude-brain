@@ -220,7 +220,7 @@ jq -s '
   .[0] as $cur | .[1] as $other |
   $cur
   | .environmental.settings.content   = ([$cur.environmental.settings.content   // {}, $other.environmental.settings.content   // {}] | deep_merge)
-  | .environmental.keybindings.content = ([$cur.environmental.keybindings.content // {}, $other.environmental.keybindings.content // {}] | deep_merge)
+  | .environmental.keybindings.content = ([$cur.environmental.keybindings.content // [], $other.environmental.keybindings.content // []] | deep_merge)
   | .environmental.mcp_servers         = (($cur.environmental.mcp_servers // {}) * ($other.environmental.mcp_servers // {}))
 ' "$OUTPUT" "$OTHER" > "$tmp" && mv "$tmp" "$OUTPUT"
 
@@ -271,7 +271,7 @@ if [ "$(echo "$final_groups" | jq 'length')" -gt 0 ]; then
       for m in "${existing[@]}"; do
         if echo "$cur_mem" | jq -e --arg m "$m" --arg f "$fname" \
             '.[$m] | has($f)' > /dev/null 2>&1; then
-          c=$(echo "$cur_mem" | jq -rn --argjson mem "$cur_mem" \
+          c=$(jq -rn --argjson mem "$cur_mem" \
             --arg m "$m" --arg f "$fname" '$mem[$m][$f].content // ""')
           has_m+=("$m"); contents+=("$c")
         fi
@@ -303,19 +303,11 @@ if [ "$(echo "$final_groups" | jq 'length')" -gt 0 ]; then
           mc=$(llm_merge_text "group ${gname}/${fname}" "$mc" "${contents[$i]}") \
             || { mc="${contents[0]}"; log_warn "LLM group merge failed for ${gname}/${fname} — using first version."; break; }
         done
-        # Apply merged content to all group members
+        # Apply merged content to all group members (including those that didn't have the file)
         for m in "${existing[@]}"; do
           cur_mem=$(echo "$cur_mem" | jq \
             --arg m "$m" --arg f "$fname" --arg c "$mc" \
             '.[$m][$f] = {content: $c, hash: "merged"}')
-        done
-        # Copy to members that didn't have it at all
-        for m in "${existing[@]}"; do
-          echo "$cur_mem" | jq -e --arg m "$m" --arg f "$fname" \
-            '.[$m] | has($f)' > /dev/null 2>&1 || \
-          cur_mem=$(echo "$cur_mem" | jq \
-            --arg m "$m" --arg f "$fname" --arg c "$mc" \
-            '.[$m][$f] = {content: $c, hash: "group-synced"}')
         done
       fi
     done <<< "$all_fnames"
