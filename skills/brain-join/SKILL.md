@@ -127,16 +127,14 @@ The Git remote URL is provided as: $ARGUMENTS
 10. Based on choice, apply consolidated brain to local machine:
     - **Merge** (recommended): Use merge-structured.sh to merge consolidated brain WITH local snapshot,
       then apply the result locally via import.sh. The consolidated/brain.json is NOT modified —
-      only the local Claude files are updated.
+      only the local Claude files are updated. (Do NOT call merge-semantic.sh here — that is only
+      used by pull.sh for N-way merge of all machine snapshots during a full sync.)
       ```bash
       MERGED_OUTPUT=$(mktemp)
       bash "${CLAUDE_PLUGIN_ROOT}/scripts/merge-structured.sh" \
         ~/.claude/brain-repo/consolidated/brain.json \
         ~/.claude/brain-repo/machines/${MACHINE_ID}/brain-snapshot.json \
         "$MERGED_OUTPUT"
-      bash "${CLAUDE_PLUGIN_ROOT}/scripts/merge-semantic.sh" \
-        "$MERGED_OUTPUT" \
-        ~/.claude/brain-repo/machines/${MACHINE_ID}/brain-snapshot.json
       bash "${CLAUDE_PLUGIN_ROOT}/scripts/import.sh" "$MERGED_OUTPUT"
       rm -f "$MERGED_OUTPUT"
       ```
