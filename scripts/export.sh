@@ -123,33 +123,46 @@ build_snapshot() {
     fi
   fi
 
+  # Load project groups: {"canonical-name": ["proj-a", "proj-b"], ...}
+  # Lets users cluster differently-named projects under one memory key.
+  local groups_file="${HOME}/.claude/brain-groups.json"
+  local project_groups="{}"
+  if [ -f "$groups_file" ]; then
+    project_groups=$(jq '.' "$groups_file" 2>/dev/null || echo "{}")
+  fi
+  # Reverse map: basename -> canonical group name
+  local basename_to_group
+  basename_to_group=$(echo "$project_groups" | jq '
+    to_entries | map(.key as $g | .value[] | {(.): $g}) | add // {}
+  ')
+
   # Experiential: auto memory
+  # Key is always the decoded basename (for cross-machine portability), or the
+  # group's canonical name when the project belongs to a configured group.
+  # On key collision (same basename from two paths, or multiple projects in one
+  # group) files are unioned — existing entries take priority.
   local auto_memory="{}"
   if [ -d "${CLAUDE_DIR}/projects" ]; then
-      # Emit {key, encoded, val} objects so the jq accumulator can detect name
-      # collisions (two different absolute paths that share the same basename, e.g.
-      # /home/alice/myproj and /work/myproj both decode to "myproj").
-      # On collision the second occurrence uses the encoded path as key so no data
-      # is silently overwritten.
       auto_memory=$(find "${CLAUDE_DIR}/projects" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | while read -r proj_dir; do
         local mem_dir="${proj_dir}/memory"
         if [ -d "$mem_dir" ] && [ "$(ls -A "$mem_dir" 2>/dev/null)" ]; then
-          local encoded
+          local encoded name key entries
           encoded=$(basename "$proj_dir")
-          local name
           name=$(project_name_from_encoded "$encoded")
-          local entries
+          # Map to group canonical name if applicable, else use basename
+          key=$(echo "$basename_to_group" | jq -r --arg n "$name" '.[$n] // $n')
           entries=$(scan_dir_entries "$mem_dir")
-          jq -n --arg key "$name" --arg encoded "$encoded" --argjson val "$entries" \
-            '{key: $key, encoded: $encoded, val: $val}'
+          jq -n --arg key "$key" --argjson val "$entries" '{($key): $val}'
         fi
       done | jq -s '
         reduce .[] as $item ({};
-          if has($item.key) then
-            # Collision: fall back to encoded path as key so data is not lost
-            .[$item.encoded] = $item.val
+          ($item | to_entries[0].key) as $k |
+          ($item | to_entries[0].value) as $v |
+          if has($k) then
+            # Union: incoming entries fill gaps, existing entries take priority
+            .[$k] = ($v + .[$k])
           else
-            .[$item.key] = $item.val
+            .[$k] = $v
           end
         )
       ')
@@ -226,13 +239,15 @@ build_snapshot() {
       --argjson shared_skills "$shared_skills" \
       --argjson shared_agents "$shared_agents" \
       --argjson shared_rules "$shared_rules" \
+      --argjson project_groups "$project_groups" \
       '{
         schema_version: $schema_ver,
         exported_at: $ts,
         machine: { id: $mid, name: $mn, os: $os },
         declarative: {
           claude_md: $claude_md,
-          rules: $rules
+          rules: $rules,
+          project_groups: $project_groups
         },
         procedural: {
           skills: $skills,

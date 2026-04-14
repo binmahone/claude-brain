@@ -47,6 +47,16 @@ def deep_merge:
 ($other.declarative.rules // {}) as $other_rules |
 ($base_rules * $other_rules) as $merged_rules |
 
+# Merge declarative: project_groups — union group names, union members per group
+($base.declarative.project_groups // {}) as $base_groups |
+($other.declarative.project_groups // {}) as $other_groups |
+(($base_groups | keys) + ($other_groups | keys) | unique | map(
+  . as $g |
+  {($g): (
+    [($base_groups[$g] // [])[], ($other_groups[$g] // [])[]] | unique
+  )}
+) | add // {}) as $merged_groups |
+
 # Merge procedural: skills (union by name)
 ($base.procedural.skills // {}) as $base_skills |
 ($other.procedural.skills // {}) as $other_skills |
@@ -116,7 +126,8 @@ def deep_merge:
 $base * {
   declarative: {
     claude_md: $base.declarative.claude_md,
-    rules: $merged_rules
+    rules: $merged_rules,
+    project_groups: $merged_groups
   },
   procedural: {
     skills: $merged_skills,

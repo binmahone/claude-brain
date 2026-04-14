@@ -183,28 +183,36 @@ import_brain() {
     output_styles=$(echo "$brain" | jq '.procedural.output_styles // {}')
     import_dir_entries "${CLAUDE_DIR}/output-styles" "$output_styles"
 
+  # Import project groups config so it syncs across machines
+    local project_groups
+    project_groups=$(echo "$brain" | jq '.declarative.project_groups // {}')
+    if [ "$(echo "$project_groups" | jq 'length')" -gt 0 ]; then
+      echo "$project_groups" > "${HOME}/.claude/brain-groups.json"
+    fi
+
   # Experiential: auto memory
+  # A snapshot key is the project basename OR a group canonical name.
+  # For a group key, write the memory into every member project dir on this machine.
     echo "$brain" | jq -r '.experiential.auto_memory // {} | keys[]' 2>/dev/null | while read -r project; do
       local entries
       entries=$(echo "$brain" | jq --arg p "$project" '.experiential.auto_memory[$p] // {}')
-      # Find matching project dir.
-      # The snapshot key is normally the decoded basename ("myproject"), but can be
-      # the encoded path ("-home-alice-myproject") when a name collision was detected
-      # at export time.  Match both cases.
-      local target_dir=""
+
+      # Resolve group members: if $project is a group canonical name, get its members;
+      # otherwise treat it as a plain basename (single-element list).
+      local members
+      members=$(echo "$project_groups" | jq -r --arg p "$project" \
+        'if has($p) then .[$p][] else $p end' 2>/dev/null)
+
       if [ -d "${CLAUDE_DIR}/projects" ]; then
         for proj_dir in "${CLAUDE_DIR}"/projects/*/; do
           local enc_base name
           enc_base=$(basename "$proj_dir")
           name=$(project_name_from_encoded "$enc_base")
-          if [ "$name" = "$project" ] || [ "$enc_base" = "$project" ]; then
-            target_dir="${proj_dir}memory"
-            break
+          # Match if the decoded basename equals project key or any group member
+          if echo "$members" | grep -qx "$name"; then
+            import_dir_entries "${proj_dir}memory" "$entries"
           fi
         done
-      fi
-      if [ -n "$target_dir" ]; then
-        import_dir_entries "$target_dir" "$entries"
       fi
     done
 
