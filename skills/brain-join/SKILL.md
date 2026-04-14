@@ -129,43 +129,35 @@ The Git remote URL is provided as: $ARGUMENTS
    }
    ```
 
-9. Re-consolidate: now that the new machine's snapshot is in machines/, re-run the full
-   N-way merge across ALL machine snapshots (same logic as sync.sh) to produce a fresh
-   consolidated brain, then import it locally:
+9. Merge this machine's snapshot into the consolidated brain (2-way), then import:
    ```bash
-   snapshots=()
-   for f in ~/.claude/brain-repo/machines/*/brain-snapshot.json; do
-     [ -f "$f" ] && snapshots+=("$f")
-   done
+   CURRENT_SNAPSHOT="${HOME}/.claude/brain-repo/machines/${MACHINE_ID}/brain-snapshot.json"
+   CONSOLIDATED="${HOME}/.claude/brain-repo/consolidated/brain.json"
 
    mkdir -p ~/.claude/brain-repo/consolidated
 
-   if [ ${#snapshots[@]} -eq 1 ]; then
-     cp "${snapshots[0]}" ~/.claude/brain-repo/consolidated/brain.json
+   if [ ! -f "$CONSOLIDATED" ]; then
+     # No consolidated yet — this machine's snapshot becomes the seed
+     cp "$CURRENT_SNAPSHOT" "$CONSOLIDATED"
    else
-     # Pairwise structured merge — use a temp file to avoid BASE=OUTPUT truncation
-     MERGE_TMP=$(mktemp)
-     cp "${snapshots[0]}" "$MERGE_TMP"
-     for ((i=1; i<${#snapshots[@]}; i++)); do
-       STEP_TMP=$(mktemp)
-       bash "${CLAUDE_PLUGIN_ROOT}/scripts/merge-structured.sh" \
-         "$MERGE_TMP" \
-         "${snapshots[i]}" \
-         "$STEP_TMP"
-       mv "$STEP_TMP" "$MERGE_TMP"
-     done
+     # 2-way: structured merge (handles group sync), then semantic merge on top
+     STEP_TMP=$(mktemp)
+     bash "${CLAUDE_PLUGIN_ROOT}/scripts/merge-structured.sh" \
+       "$CONSOLIDATED" "$CURRENT_SNAPSHOT" "$STEP_TMP"
 
-     # Semantic merge (N-way, all snapshots at once); falls back to structured if it fails
+     CONSOLIDATED_COPY=$(mktemp)
+     cp "$CONSOLIDATED" "$CONSOLIDATED_COPY"
+
      if bash "${CLAUDE_PLUGIN_ROOT}/scripts/merge-semantic.sh" \
-         ~/.claude/brain-repo/consolidated/brain.json \
-         "${snapshots[@]}"; then
-       rm -f "$MERGE_TMP"
+         "$CONSOLIDATED" "$CONSOLIDATED_COPY" "$CURRENT_SNAPSHOT"; then
+       rm -f "$STEP_TMP" "$CONSOLIDATED_COPY"
      else
-       mv "$MERGE_TMP" ~/.claude/brain-repo/consolidated/brain.json
+       mv "$STEP_TMP" "$CONSOLIDATED"
+       rm -f "$CONSOLIDATED_COPY"
      fi
    fi
 
-   bash "${CLAUDE_PLUGIN_ROOT}/scripts/import.sh" ~/.claude/brain-repo/consolidated/brain.json
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/import.sh" "$CONSOLIDATED"
    ```
 
 10. Commit consolidated and push everything once:

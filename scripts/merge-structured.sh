@@ -122,6 +122,20 @@ def deep_merge:
     end
   ) | add // {}) as $merged_amem |
 
+# Group bidirectional sync: for each group, find all member keys that exist in
+# $merged_mem and union their files across all of them — both directions.
+# Members are stored as encoded path keys (e.g. "-home-alice-spark").
+# This is the only place where memory crosses project-key boundaries.
+(reduce ($merged_groups | to_entries[]) as $grp (
+  $merged_mem;
+  [ $grp.value[] | select(. as $m | ($merged_mem | has($m))) ] as $existing |
+  if ($existing | length) > 1 then
+    # Union of all files across every existing member (existing entries take priority)
+    ([ $existing[] | $merged_mem[.] ] | add // {}) as $all_files |
+    reduce $existing[] as $m (.; .[$m] = ($all_files + .[$m]))
+  else . end
+)) as $group_synced_mem |
+
 # Assemble merged brain
 $base * {
   declarative: {
@@ -135,7 +149,7 @@ $base * {
     output_styles: $merged_styles
   },
   experiential: {
-    auto_memory: $merged_mem,
+    auto_memory: $group_synced_mem,
     agent_memory: $merged_amem
   },
   environmental: {

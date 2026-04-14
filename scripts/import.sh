@@ -191,28 +191,15 @@ import_brain() {
     fi
 
   # Experiential: auto memory
-  # A snapshot key is the project basename OR a group canonical name.
-  # For a group key, write the memory into every member project dir on this machine.
+  # Keys are full encoded directory names (e.g. -home-alice-myproject).
+  # Only import into project dirs that exist on this machine — different machines
+  # will have different subsets of project directories.
     echo "$brain" | jq -r '.experiential.auto_memory // {} | keys[]' 2>/dev/null | while read -r project; do
-      local entries
+      local entries target_dir
       entries=$(echo "$brain" | jq --arg p "$project" '.experiential.auto_memory[$p] // {}')
-
-      # Resolve group members: if $project is a group canonical name, get its members;
-      # otherwise treat it as a plain basename (single-element list).
-      local members
-      members=$(echo "$project_groups" | jq -r --arg p "$project" \
-        'if has($p) then .[$p][] else $p end' 2>/dev/null)
-
-      if [ -d "${CLAUDE_DIR}/projects" ]; then
-        for proj_dir in "${CLAUDE_DIR}"/projects/*/; do
-          local enc_base name
-          enc_base=$(basename "$proj_dir")
-          name=$(project_name_from_encoded "$enc_base")
-          # Match if the decoded basename equals project key or any group member
-          if echo "$members" | grep -qx "$name"; then
-            import_dir_entries "${proj_dir}memory" "$entries"
-          fi
-        done
+      target_dir="${CLAUDE_DIR}/projects/${project}/memory"
+      if [ -d "${CLAUDE_DIR}/projects/${project}" ]; then
+        import_dir_entries "$target_dir" "$entries"
       fi
     done
 

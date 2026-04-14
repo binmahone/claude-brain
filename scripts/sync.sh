@@ -36,80 +36,68 @@ if [ -f "${BRAIN_REPO}/consolidated/brain.json" ]; then
   local_consolidated_hash=$(file_hash "${BRAIN_REPO}/consolidated/brain.json")
 fi
 
-# Collect all machine snapshots (decrypt if needed)
-snapshot_count=0
-snapshots=()
-decrypted_snapshots=()
+# 2-way merge: consolidated (all other machines' merged state) + this machine's snapshot.
+# The consolidated already represents the full history of all previously synced machines.
+# We only need to fold in this machine's new changes.
+current_snapshot="${BRAIN_REPO}/machines/${machine_id}/brain-snapshot.json"
+current_snapshot_work=""   # path to the (possibly decrypted) snapshot we'll actually read
 
-for snapshot_file in "${BRAIN_REPO}"/machines/*/brain-snapshot.json; do
-  if [ -f "$snapshot_file" ]; then
-    # Check if snapshot is encrypted (only read first line)
-    if head -1 "$snapshot_file" | grep -q "^-----BEGIN AGE ENCRYPTED FILE-----"; then
-      if encryption_enabled && command -v age &>/dev/null; then
-        # Decrypt to temp file
-        decrypted_tmp=$(brain_mktemp)
-        if decrypt_file "$snapshot_file" "$decrypted_tmp"; then
-          snapshots+=("$decrypted_tmp")
-          decrypted_snapshots+=("$decrypted_tmp")
-          snapshot_count=$((snapshot_count + 1))
-        else
-          log_warn "Failed to decrypt snapshot: $snapshot_file"
-        fi
+if [ ! -f "$current_snapshot" ]; then
+  log_info "No current snapshot found. Skipping merge."
+else
+  # Decrypt if needed
+  if head -1 "$current_snapshot" | grep -q "^-----BEGIN AGE ENCRYPTED FILE-----"; then
+    if encryption_enabled && command -v age &>/dev/null; then
+      decrypted_tmp=$(brain_mktemp)
+      if decrypt_file "$current_snapshot" "$decrypted_tmp"; then
+        current_snapshot_work="$decrypted_tmp"
       else
-        log_warn "Encrypted snapshot found but encryption not configured: $snapshot_file"
+        log_warn "Failed to decrypt current snapshot. Skipping merge."
       fi
     else
-      # Unencrypted snapshot
-      snapshots+=("$snapshot_file")
-      snapshot_count=$((snapshot_count + 1))
+      log_warn "Encrypted snapshot found but encryption not configured. Skipping merge."
     fi
+  else
+    current_snapshot_work="$current_snapshot"
   fi
-done
-
-if [ "$snapshot_count" -eq 0 ]; then
-  log_info "No machine snapshots found."
-  exit 0
 fi
 
 mkdir -p "${BRAIN_REPO}/consolidated"
 
-if [ "$snapshot_count" -eq 1 ]; then
-  # Only one machine — its snapshot IS the consolidated brain
-  cp "${snapshots[0]}" "${BRAIN_REPO}/consolidated/brain.json"
-else
-  # Multiple machines — N-way merge 
-  log_info "Merging snapshots from ${snapshot_count} machines..."
+if [ -n "$current_snapshot_work" ]; then
+  if [ ! -f "${BRAIN_REPO}/consolidated/brain.json" ]; then
+    # No consolidated yet — current snapshot becomes the seed
+    log_info "No consolidated brain found. Using current snapshot as base."
+    cp "$current_snapshot_work" "${BRAIN_REPO}/consolidated/brain.json"
+  else
+    log_info "Merging with consolidated brain..."
 
-  # Use merge-structured.sh for pairwise structured merge
-  # Use a temp file per step to avoid BASE=OUTPUT truncation (shell truncates
-  # the output file before jq opens the input when they share the same path)
-  merge_tmp=$(brain_mktemp)
-  cp "${snapshots[0]}" "$merge_tmp"
-
-  for ((i=1; i<${#snapshots[@]}; i++)); do
+    # Structured merge (includes group bidirectional sync)
     step_tmp=$(brain_mktemp)
     "${SCRIPT_DIR}/merge-structured.sh" \
-      "$merge_tmp" \
-      "${snapshots[i]}" \
+      "${BRAIN_REPO}/consolidated/brain.json" \
+      "$current_snapshot_work" \
       "$step_tmp"
-    mv "$step_tmp" "$merge_tmp"
-  done
-  cp "$merge_tmp" "${BRAIN_REPO}/consolidated/brain.json.merging"
-  rm -f "$merge_tmp"
 
-  # Now run N-way semantic merge on all snapshots at once
-  if "${SCRIPT_DIR}/merge-semantic.sh" \
-    "${BRAIN_REPO}/consolidated/brain.json" \
-    "${snapshots[@]}"; then
-    # Semantic merge succeeded — its output is brain.json; discard structured fallback
-    rm -f "${BRAIN_REPO}/consolidated/brain.json.merging"
-  else
-    log_warn "Semantic merge failed. Using structured merge only."
-    # Fall back to the structurally merged version
-    if [ -f "${BRAIN_REPO}/consolidated/brain.json.merging" ]; then
-      mv "${BRAIN_REPO}/consolidated/brain.json.merging" "${BRAIN_REPO}/consolidated/brain.json"
+    # Semantic merge: LLM sees consolidated (other machines) vs current snapshot
+    # Use a copy so OUTPUT path != SNAPSHOTS[0] path
+    consolidated_copy=$(brain_mktemp)
+    cp "${BRAIN_REPO}/consolidated/brain.json" "$consolidated_copy"
+
+    if "${SCRIPT_DIR}/merge-semantic.sh" \
+        "${BRAIN_REPO}/consolidated/brain.json" \
+        "$consolidated_copy" \
+        "$current_snapshot_work"; then
+      rm -f "$step_tmp" "$consolidated_copy"
+    else
+      log_warn "Semantic merge failed. Using structured merge only."
+      mv "$step_tmp" "${BRAIN_REPO}/consolidated/brain.json"
+      rm -f "$consolidated_copy"
     fi
   fi
+
+  # Clean up temp decrypted file if one was created
+  [ "$current_snapshot_work" != "$current_snapshot" ] && rm -f "$current_snapshot_work"
 fi
 
 # Apply consolidated brain locally (with validation and backup)
@@ -164,8 +152,8 @@ fi
 # Log the merge
 new_consolidated_hash=$(file_hash "${BRAIN_REPO}/consolidated/brain.json")
 if [ "$local_consolidated_hash" != "$new_consolidated_hash" ]; then
-  append_merge_log "pull+merge" "Merged ${snapshot_count} machine snapshots"
-  log_info "Brain synced: merged ${snapshot_count} machine(s)."
+  append_merge_log "pull+merge" "Merged consolidated brain"
+  log_info "Brain synced: consolidated brain updated."
 else
   log_info "Brain synced: no changes."
 fi
