@@ -21,10 +21,15 @@ load_config
 
 machine_id=$(get_config "machine_id")
 
-# Pull --rebase: sync with remote before pushing
-# This ensures our locally committed snapshot won't conflict with other machines' pushes.
-# We pull AFTER snapshot.sh has committed our snapshot locally, so our commit is rebased
-# on top of the remote's latest — other machines' snapshots won't overwrite ours.
+# Step 1: snapshot current state first.
+# We do this at SessionStart (not SessionEnd) because SessionEnd doesn't fire
+# reliably when the user closes the terminal window. Snapshotting here ensures
+# we always capture the previous session's accumulated state before syncing.
+log_info "Taking snapshot of current brain state..."
+"${SCRIPT_DIR}/snapshot.sh" --quiet || log_warn "Snapshot failed — continuing with last committed state."
+
+# Pull --rebase: sync with remote after committing our snapshot.
+# Our local commit is rebased on top of remote — other machines' snapshots won't overwrite ours.
 brain_git pull --rebase origin main 2>/dev/null || {
   brain_git rebase --abort 2>/dev/null || true
   log_warn "Could not sync with remote. Working offline."
