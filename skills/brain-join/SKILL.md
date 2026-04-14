@@ -112,16 +112,21 @@ The Git remote URL is provided as: $ARGUMENTS
    fi
    ```
 
-8. Export local snapshot and commit it to git immediately (before import runs),
-   so that the current local state is preserved in git history before anything is overwritten:
+8. Export local snapshot, commit immediately, then pull --rebase to sync with remote.
+   Committing before pull ensures our snapshot is not overwritten by git's merge:
    ```bash
    MACHINE_ID=$(cat ~/.claude/brain-config.json | jq -r '.machine_id')
    mkdir -p ~/.claude/brain-repo/machines/${MACHINE_ID}
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/export.sh" --output ~/.claude/brain-repo/machines/${MACHINE_ID}/brain-snapshot.json
 
    cd ~/.claude/brain-repo
-   git add machines/
-   git commit -m "Join: $(hostname) snapshot before import"
+   git add machines/ meta/
+   git commit -m "Join: $(hostname) snapshot"
+
+   git pull --rebase origin main || {
+     git rebase --abort 2>/dev/null || true
+     echo "WARNING: Could not sync with remote. Continuing with local state."
+   }
    ```
 
 9. Re-consolidate: now that the new machine's snapshot is in machines/, re-run the full
@@ -163,11 +168,11 @@ The Git remote URL is provided as: $ARGUMENTS
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/import.sh" ~/.claude/brain-repo/consolidated/brain.json
    ```
 
-10. Push the updated state:
+10. Commit consolidated and push everything once:
     ```bash
     cd ~/.claude/brain-repo
-    git add machines/ consolidated/ meta/
-    git commit -m "Join: $(hostname) joined brain network"
+    git add consolidated/
+    git commit -m "Join: $(hostname) consolidated brain"
     git push origin main
     ```
 

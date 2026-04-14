@@ -20,25 +20,14 @@ load_config
 
 machine_id=$(get_config "machine_id")
 
-# Retry dirty push from previous session
-dirty=$(get_config "dirty" 2>/dev/null || echo "false")
-if [ "$dirty" = "true" ]; then
-  log_info "Retrying dirty push from previous session..."
-  "${SCRIPT_DIR}/push.sh" --quiet --skip-secret-scan || true
-fi
-
-# Fetch latest
-brain_git fetch origin main 2>/dev/null || {
-  log_warn "Could not fetch from remote. Working offline."
+# Pull --rebase: sync with remote before pushing
+# This ensures our locally committed snapshot won't conflict with other machines' pushes.
+# We pull AFTER push.sh has committed our snapshot locally, so our commit is rebased
+# on top of the remote's latest — other machines' snapshots won't overwrite ours.
+brain_git pull --rebase origin main 2>/dev/null || {
+  brain_git rebase --abort 2>/dev/null || true
+  log_warn "Could not sync with remote. Working offline."
   exit 0
-}
-brain_git merge origin/main --no-edit 2>/dev/null || {
-  # If merge conflicts in git, try rebase
-  brain_git rebase origin/main 2>/dev/null || {
-    brain_git rebase --abort 2>/dev/null || true
-    log_warn "Git merge conflict. Run /brain-sync manually."
-    exit 1
-  }
 }
 
 # Check if consolidated brain has changed
@@ -126,19 +115,22 @@ fi
 # Apply consolidated brain locally (with validation and backup)
 "${SCRIPT_DIR}/import.sh" "${BRAIN_REPO}/consolidated/brain.json"
 
-# Commit and push consolidated
+# Commit consolidated and push everything once (snapshot commit from push.sh + consolidated)
 brain_git add consolidated/ meta/
-if brain_git diff --cached --quiet 2>/dev/null; then
-  log_info "Consolidated brain unchanged."
-else
+brain_git diff --cached --quiet 2>/dev/null || \
   brain_git commit -m "Consolidated: $(get_machine_name) merged at $(now_iso)" 2>/dev/null || true
-  brain_push_with_retry 3 2 || log_warn "Failed to push consolidated brain."
-fi
 
-# Update local config
+if brain_push_with_retry 3 2; then
   local_tmp=$(brain_mktemp)
-  jq --arg ts "$(now_iso)" '.last_pull = $ts' "$BRAIN_CONFIG" > "$local_tmp"
+  jq --arg ts "$(now_iso)" '.last_pull = $ts | .dirty = false' "$BRAIN_CONFIG" > "$local_tmp"
   mv "$local_tmp" "$BRAIN_CONFIG"
+  log_info "Brain pushed."
+else
+  local_tmp=$(brain_mktemp)
+  jq --arg ts "$(now_iso)" '.last_pull = $ts | .dirty = true' "$BRAIN_CONFIG" > "$local_tmp"
+  mv "$local_tmp" "$BRAIN_CONFIG"
+  log_warn "Push failed. Will retry next session."
+fi
 
 # Check if auto-evolve is due
 if [ -f "$DEFAULTS_FILE" ]; then

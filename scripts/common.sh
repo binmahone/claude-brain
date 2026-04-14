@@ -191,7 +191,7 @@ brain_push_with_retry() {
     if brain_git push origin main 2>/dev/null; then
       return 0
     fi
-    # Pull rebase and retry
+    # Another machine pushed between our pull and push — rebase and retry
     brain_git pull --rebase origin main 2>/dev/null || true
     attempt=$((attempt + 1))
     if [ "$attempt" -le "$max_attempts" ]; then

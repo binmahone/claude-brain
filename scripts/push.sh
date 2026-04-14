@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# push.sh — Export brain snapshot and push to Git remote
+# push.sh — Export brain snapshot and commit locally (push happens in pull.sh)
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/common.sh"
@@ -35,7 +35,7 @@ $SKIP_SECRET_SCAN && export_args+=(--skip-secret-scan)
 # Check if anything actually changed
 if ! $FORCE && ! $DRY_RUN; then
   if brain_git diff --quiet -- "machines/${machine_id}/" 2>/dev/null; then
-    log_info "No changes to push."
+    log_info "No changes to commit."
     exit 0
   fi
 fi
@@ -47,28 +47,14 @@ if $DRY_RUN; then
   exit 0
 fi
 
-# Update machines.json with last sync time
+# Update per-machine meta file
 "${SCRIPT_DIR}/register-machine.sh" "$(get_config remote)"
 
-# Commit and push (add paths separately so missing shared/ doesn't block others)
+# Commit locally — pull.sh will push everything together after pull --rebase
 brain_git add "machines/${machine_id}/" "meta/machines/${machine_id}.json" 2>/dev/null || true
 brain_git add "shared/" 2>/dev/null || true
 brain_git commit -m "Sync: $(get_machine_name) (${machine_id}) at $(now_iso)" 2>/dev/null || {
   log_info "Nothing to commit."
-  exit 0
 }
 
-# Push with retry (handles concurrent pushes)
-if brain_push_with_retry 3 2; then
-  # Update local config
-  local_tmp=$(brain_mktemp)
-  jq --arg ts "$(now_iso)" '.last_push = $ts | .dirty = false' "$BRAIN_CONFIG" > "$local_tmp"
-  mv "$local_tmp" "$BRAIN_CONFIG"
-  log_info "Brain snapshot pushed."
-else
-  # Mark dirty for retry on next session start
-  local_tmp=$(brain_mktemp)
-  jq '.dirty = true' "$BRAIN_CONFIG" > "$local_tmp"
-  mv "$local_tmp" "$BRAIN_CONFIG"
-  log_warn "Push failed. Marked dirty for retry."
-fi
+log_info "Brain snapshot committed locally."
