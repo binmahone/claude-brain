@@ -19,6 +19,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+check_llm_available || exit 1
 check_dependencies
 load_config
 

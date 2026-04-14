@@ -371,10 +371,10 @@ EOF
 }
 EOF
 
-  bash "$PROJECT_DIR/scripts/merge-structured.sh" "$snap_a" "$snap_b" "$merged" 2>/dev/null || true
+  bash "$PROJECT_DIR/scripts/merge.sh" "$snap_a" "$snap_b" "$merged" 2>/dev/null || true
 
   if [ ! -f "$merged" ]; then
-    fail "merge-structured.sh did not produce output"
+    fail "merge.sh did not produce output"
     return
   fi
 

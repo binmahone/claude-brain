@@ -279,6 +279,19 @@ now_iso() {
 }
 
 # ── Dependency Check ───────────────────────────────────────────────────────────
+check_llm_available() {
+  if ! command -v claude &>/dev/null; then
+    log_error "claude CLI not found. Brain sync requires Claude Code CLI."
+    log_error "Install it from: https://claude.ai/code"
+    return 1
+  fi
+  if ! claude --version &>/dev/null 2>&1; then
+    log_error "claude CLI is not responding. Check your installation and API key."
+    return 1
+  fi
+  return 0
+}
+
 check_dependencies() {
   local missing=()
 

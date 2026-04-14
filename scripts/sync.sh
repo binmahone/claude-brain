@@ -15,6 +15,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+check_llm_available || exit 1
 check_dependencies
 load_config
 
@@ -71,68 +72,16 @@ if [ -n "$current_snapshot_work" ]; then
     cp "$current_snapshot_work" "${BRAIN_REPO}/consolidated/brain.json"
   else
     log_info "Merging with consolidated brain..."
-
-    # Structured merge (includes group bidirectional sync)
-    step_tmp=$(brain_mktemp)
-    "${SCRIPT_DIR}/merge-structured.sh" \
+    merge_out=$(brain_mktemp)
+    "${SCRIPT_DIR}/merge.sh" \
       "${BRAIN_REPO}/consolidated/brain.json" \
       "$current_snapshot_work" \
-      "$step_tmp"
-
-    # Semantic merge: LLM sees consolidated (other machines) vs current snapshot
-    # Use a copy so OUTPUT path != SNAPSHOTS[0] path
-    consolidated_copy=$(brain_mktemp)
-    cp "${BRAIN_REPO}/consolidated/brain.json" "$consolidated_copy"
-
-    if "${SCRIPT_DIR}/merge-semantic.sh" \
-        "${BRAIN_REPO}/consolidated/brain.json" \
-        "$consolidated_copy" \
-        "$current_snapshot_work"; then
-      rm -f "$step_tmp" "$consolidated_copy"
-    else
-      log_warn "Semantic merge failed. Using structured merge only."
-      mv "$step_tmp" "${BRAIN_REPO}/consolidated/brain.json"
-      rm -f "$consolidated_copy"
-    fi
+      "$merge_out"
+    mv "$merge_out" "${BRAIN_REPO}/consolidated/brain.json"
   fi
 
   # Clean up temp decrypted file if one was created
   [ "$current_snapshot_work" != "$current_snapshot" ] && rm -f "$current_snapshot_work"
-fi
-
-# Apply group bidirectional sync to the final consolidated brain.
-# This must run AFTER all merging (structured + semantic) because
-# merge-structured's group sync is discarded when semantic merge succeeds.
-# Union groups from the consolidated brain AND the local config so that
-# any new groups added on this machine since the last sync are included.
-if [ -f "${BRAIN_REPO}/consolidated/brain.json" ]; then
-  brain_groups=$(jq '.declarative.project_groups // {}' "${BRAIN_REPO}/consolidated/brain.json")
-  local_groups="{}"
-  if [ -f "${HOME}/.claude/brain-groups.json" ]; then
-    local_groups=$(jq '.' "${HOME}/.claude/brain-groups.json" 2>/dev/null || echo "{}")
-  fi
-  merged_groups=$(jq -n --argjson a "$brain_groups" --argjson b "$local_groups" '
-    ($a | keys) + ($b | keys) | unique | map(
-      . as $g | {($g): ([($a[$g] // [])[], ($b[$g] // [])[]] | unique)}
-    ) | add // {}
-  ')
-  if [ "$(echo "$merged_groups" | jq 'length')" -gt 0 ]; then
-    group_tmp=$(brain_mktemp)
-    jq --argjson groups "$merged_groups" '
-      (.experiential.auto_memory // {}) as $mem |
-      (reduce ($groups | to_entries[]) as $grp (
-        $mem;
-        [ $grp.value[] | select(. as $m | ($mem | has($m))) ] as $existing |
-        if ($existing | length) > 1 then
-          ([ $existing[] | $mem[.] ] | add // {}) as $all_files |
-          reduce $existing[] as $m (.; .[$m] = ($all_files + .[$m]))
-        else . end
-      )) as $synced_mem |
-      .experiential.auto_memory = $synced_mem
-    ' "${BRAIN_REPO}/consolidated/brain.json" > "$group_tmp" && \
-      mv "$group_tmp" "${BRAIN_REPO}/consolidated/brain.json"
-    log_info "Group sync applied to consolidated brain."
-  fi
 fi
 
 # Apply consolidated brain locally (with validation and backup)

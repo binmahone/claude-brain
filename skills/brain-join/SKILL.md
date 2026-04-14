@@ -140,46 +140,11 @@ The Git remote URL is provided as: $ARGUMENTS
      # No consolidated yet — this machine's snapshot becomes the seed
      cp "$CURRENT_SNAPSHOT" "$CONSOLIDATED"
    else
-     # 2-way: structured merge (handles group sync), then semantic merge on top
-     STEP_TMP=$(mktemp)
-     bash "${CLAUDE_PLUGIN_ROOT}/scripts/merge-structured.sh" \
-       "$CONSOLIDATED" "$CURRENT_SNAPSHOT" "$STEP_TMP"
-
-     CONSOLIDATED_COPY=$(mktemp)
-     cp "$CONSOLIDATED" "$CONSOLIDATED_COPY"
-
-     if bash "${CLAUDE_PLUGIN_ROOT}/scripts/merge-semantic.sh" \
-         "$CONSOLIDATED" "$CONSOLIDATED_COPY" "$CURRENT_SNAPSHOT"; then
-       rm -f "$STEP_TMP" "$CONSOLIDATED_COPY"
-     else
-       mv "$STEP_TMP" "$CONSOLIDATED"
-       rm -f "$CONSOLIDATED_COPY"
-     fi
-   fi
-
-   # Apply group bidirectional sync after all merging, before import
-   BRAIN_GROUPS=$(jq '.declarative.project_groups // {}' "$CONSOLIDATED")
-   LOCAL_GROUPS="{}"
-   [ -f ~/.claude/brain-groups.json ] && LOCAL_GROUPS=$(jq '.' ~/.claude/brain-groups.json 2>/dev/null || echo "{}")
-   MERGED_GROUPS=$(jq -n --argjson a "$BRAIN_GROUPS" --argjson b "$LOCAL_GROUPS" '
-     ($a | keys) + ($b | keys) | unique | map(
-       . as $g | {($g): ([($a[$g] // [])[], ($b[$g] // [])[]] | unique)}
-     ) | add // {}
-   ')
-   if [ "$(echo "$MERGED_GROUPS" | jq 'length')" -gt 0 ]; then
-     GROUP_TMP=$(mktemp)
-     jq --argjson groups "$MERGED_GROUPS" '
-       (.experiential.auto_memory // {}) as $mem |
-       (reduce ($groups | to_entries[]) as $grp (
-         $mem;
-         [ $grp.value[] | select(. as $m | ($mem | has($m))) ] as $existing |
-         if ($existing | length) > 1 then
-           ([ $existing[] | $mem[.] ] | add // {}) as $all_files |
-           reduce $existing[] as $m (.; .[$m] = ($all_files + .[$m]))
-         else . end
-       )) as $synced_mem |
-       .experiential.auto_memory = $synced_mem
-     ' "$CONSOLIDATED" > "$GROUP_TMP" && mv "$GROUP_TMP" "$CONSOLIDATED"
+     # 2-way merge: LLM merges all conflicts, per-project context isolation, group sync included
+     MERGE_TMP=$(mktemp)
+     bash "${CLAUDE_PLUGIN_ROOT}/scripts/merge.sh" \
+       "$CONSOLIDATED" "$CURRENT_SNAPSHOT" "$MERGE_TMP"
+     mv "$MERGE_TMP" "$CONSOLIDATED"
    fi
 
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/import.sh" "$CONSOLIDATED"
