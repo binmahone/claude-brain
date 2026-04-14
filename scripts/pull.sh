@@ -92,14 +92,23 @@ else
   log_info "Merging snapshots from ${snapshot_count} machines..."
 
   # Use merge-structured.sh for pairwise structured merge
-  cp "${snapshots[0]}" "${BRAIN_REPO}/consolidated/brain.json.merging"
-  
+  # Use a temp file per step to avoid BASE=OUTPUT truncation (shell truncates
+  # the output file before jq opens the input when they share the same path)
+  local merge_tmp
+  merge_tmp=$(brain_mktemp)
+  cp "${snapshots[0]}" "$merge_tmp"
+
   for ((i=1; i<${#snapshots[@]}; i++)); do
+    local step_tmp
+    step_tmp=$(brain_mktemp)
     "${SCRIPT_DIR}/merge-structured.sh" \
-      "${BRAIN_REPO}/consolidated/brain.json.merging" \
+      "$merge_tmp" \
       "${snapshots[i]}" \
-      "${BRAIN_REPO}/consolidated/brain.json.merging"
+      "$step_tmp"
+    mv "$step_tmp" "$merge_tmp"
   done
+  cp "$merge_tmp" "${BRAIN_REPO}/consolidated/brain.json.merging"
+  rm -f "$merge_tmp"
 
   # Now run N-way semantic merge on all snapshots at once
   if "${SCRIPT_DIR}/merge-semantic.sh" \
