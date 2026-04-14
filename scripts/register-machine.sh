@@ -123,28 +123,25 @@ register_machine() {
         }' > "$BRAIN_CONFIG"
     fi
 
-  # Update machines.json in brain repo if it exists
-  local machines_file="${BRAIN_REPO}/meta/machines.json"
-  if [ -d "${BRAIN_REPO}/meta" ]; then
-    if [ ! -f "$machines_file" ]; then
-      echo '{"machines":{}}' > "$machines_file"
-    fi
-
-      local tmp
-      tmp=$(brain_mktemp)
-      jq --arg mid "$machine_id" \
-         --arg mn "$machine_name" \
-         --arg os "$os_type" \
-         --arg ts "$timestamp" \
-         --argjson projects "$projects" \
-         '.machines[$mid] = {
-           "name": $mn,
-           "os": $os,
-           "registered_at": ($ts),
-           "last_sync": $ts,
-           "projects": $projects
-         }' "$machines_file" > "$tmp" && mv "$tmp" "$machines_file"
-    fi
+  # Write per-machine file — each machine owns only its own file, no conflicts
+  if [ -d "${BRAIN_REPO}" ]; then
+    mkdir -p "${BRAIN_REPO}/meta/machines"
+    local machine_file="${BRAIN_REPO}/meta/machines/${machine_id}.json"
+    jq -n \
+       --arg mid "$machine_id" \
+       --arg mn "$machine_name" \
+       --arg os "$os_type" \
+       --arg ts "$timestamp" \
+       --argjson projects "$projects" \
+       '{
+         id: $mid,
+         name: $mn,
+         os: $os,
+         registered_at: $ts,
+         last_sync: $ts,
+         projects: $projects
+       }' > "$machine_file"
+  fi
 
   log_info "Machine registered: ${machine_name} (${machine_id})"
 }

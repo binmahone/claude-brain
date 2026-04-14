@@ -52,8 +52,8 @@ current_skills=$(jq -r '
 
 # Machine count
 machine_count=1
-if [ -f "${BRAIN_REPO}/meta/machines.json" ]; then
-  machine_count=$(jq '.machines | length' "${BRAIN_REPO}/meta/machines.json")
+if [ -d "${BRAIN_REPO}/meta/machines" ] && ls "${BRAIN_REPO}/meta/machines/"*.json &>/dev/null; then
+  machine_count=$(ls "${BRAIN_REPO}/meta/machines/"*.json | wc -l | tr -d ' ')
 fi
 
 # ── Build evolve prompt ────────────────────────────────────────────────────────

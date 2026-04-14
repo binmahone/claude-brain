@@ -61,11 +61,12 @@ if is_initialized; then
   fi
 
   # Network info
-  if [ -f "${BRAIN_REPO}/meta/machines.json" ]; then
-    machine_count=$(jq '.machines | length' "${BRAIN_REPO}/meta/machines.json")
+  if [ -d "${BRAIN_REPO}/meta/machines" ] && ls "${BRAIN_REPO}/meta/machines/"*.json &>/dev/null; then
+    machine_count=$(ls "${BRAIN_REPO}/meta/machines/"*.json | wc -l | tr -d ' ')
     echo "Network: ${machine_count} machine(s)"
-    jq -r '.machines | to_entries[] | "  - \(.value.name) (\(.key)) last sync: \(.value.last_sync // "never")"' \
-      "${BRAIN_REPO}/meta/machines.json"
+    for mf in "${BRAIN_REPO}/meta/machines/"*.json; do
+      jq -r '"  - \(.name) (\(.id)) last sync: \(.last_sync // "never")"' "$mf"
+    done
   fi
 else
   echo "Machine: $(get_machine_name)"
@@ -146,21 +147,17 @@ if [ -f "$conflicts_file" ]; then
 fi
 
 # ── Sync Statistics ────────────────────────────────────────────────────────────
-if [ -f "${BRAIN_REPO}/meta/machines.json" ]; then
+if [ -d "${BRAIN_REPO}/meta/machines" ] && ls "${BRAIN_REPO}/meta/machines/"*.json &>/dev/null; then
   echo "=== Sync Statistics ==="
   echo ""
-  
-  # Count total syncs (entries in machines.json)
-  total_syncs=$(jq '.machines | to_entries | map(.value.last_sync | select(. != null)) | length' "${BRAIN_REPO}/meta/machines.json")
+
+  machine_count=$(ls "${BRAIN_REPO}/meta/machines/"*.json | wc -l | tr -d ' ')
+  total_syncs=$machine_count
   echo "Total syncs: ${total_syncs}"
-  
-  # Get machine count
-  machine_count=$(jq '.machines | length' "${BRAIN_REPO}/meta/machines.json")
   echo "Machines synced: ${machine_count}"
-  
-  # Get first and last sync dates
-  first_sync=$(jq -r '[.machines[] | .last_sync] | map(select(. != null)) | sort | first' "${BRAIN_REPO}/meta/machines.json")
-  last_sync=$(jq -r '[.machines[] | .last_sync] | map(select(. != null)) | sort | last' "${BRAIN_REPO}/meta/machines.json")
+
+  first_sync=$(jq -r '.last_sync // "null"' "${BRAIN_REPO}/meta/machines/"*.json | grep -v null | sort | head -1)
+  last_sync=$(jq -r '.last_sync // "null"' "${BRAIN_REPO}/meta/machines/"*.json | grep -v null | sort | tail -1)
   
   if [ "$first_sync" != "null" ] && [ -n "$first_sync" ]; then
     echo "First sync: ${first_sync%%T*}"
