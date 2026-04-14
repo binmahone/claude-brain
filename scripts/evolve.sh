@@ -92,9 +92,10 @@ SCHEMA='{
           "type": { "type": "string", "enum": ["claude_md", "rule", "skill"] },
           "content": { "type": "string" },
           "reason": { "type": "string" },
+          "confidence": { "type": "number", "description": "0.0-1.0 confidence that this promotion is safe to auto-apply" },
           "source_projects": { "type": "array", "items": { "type": "string" } }
         },
-        "required": ["type", "content", "reason"]
+        "required": ["type", "content", "reason", "confidence"]
       }
     },
     "stale_entries": {
@@ -159,14 +160,55 @@ echo "$RESULT" | jq '.structured_output' > "${BRAIN_REPO}/meta/last-evolve.json"
 
 # In auto mode, apply high-confidence promotions automatically
 if $AUTO_MODE; then
-  log_info "Auto-mode: Applying high-confidence promotions..."
-  
-  # Extract high-confidence promotions (not implemented yet - would need promotion logic)
-  # For now, just update last_evolved timestamp
+  confidence_threshold=0.8
+  if [ -f "$DEFAULTS_FILE" ]; then
+    confidence_threshold=$(jq -r '.evolve_confidence_threshold // .merge_confidence_threshold // 0.8' "$DEFAULTS_FILE")
+  fi
+
+  promo_applied=0
+  promo_skipped=0
+
+  # Use process substitution so loop runs in same shell (variables survive)
+  while IFS= read -r promo; do
+    [ -z "$promo" ] && continue
+    ptype=$(echo "$promo" | jq -r '.type')
+    content=$(echo "$promo" | jq -r '.content')
+
+    case "$ptype" in
+      claude_md)
+        # Append new instruction to global CLAUDE.md
+        {
+          echo ""
+          echo "$content"
+        } >> "${HOME}/.claude/CLAUDE.md"
+        promo_applied=$((promo_applied + 1))
+        log_info "Auto-applied claude_md promotion."
+        ;;
+      rule)
+        # Write new rule file under ~/.claude/rules/
+        rule_name="auto-evolved-$(date +%s).md"
+        mkdir -p "${HOME}/.claude/rules"
+        printf '%s\n' "$content" > "${HOME}/.claude/rules/$rule_name"
+        promo_applied=$((promo_applied + 1))
+        log_info "Auto-applied rule: $rule_name"
+        ;;
+      skill)
+        # Skills require manual scaffolding — skip in auto-mode
+        promo_skipped=$((promo_skipped + 1))
+        log_info "Skipped skill promotion (requires /brain-evolve for manual review)."
+        ;;
+      *)
+        promo_skipped=$((promo_skipped + 1))
+        ;;
+    esac
+  done < <(echo "$promotions" | jq -c --arg t "$confidence_threshold" \
+    '[.[] | select((.confidence // 0) >= ($t | tonumber))] | .[]')
+
+  # Update last_evolved timestamp
   local_tmp=$(brain_mktemp)
   jq --arg ts "$(now_iso)" '.last_evolved = $ts' "$BRAIN_CONFIG" > "$local_tmp"
   mv "$local_tmp" "$BRAIN_CONFIG"
-  
-  log_info "Auto-evolve complete. High-confidence changes applied."
+
+  log_info "Auto-evolve complete. Applied: ${promo_applied}, skipped: ${promo_skipped}."
   log_info "Evolution analysis saved to meta/last-evolve.json"
 fi

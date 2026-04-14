@@ -89,11 +89,14 @@ ${memory_content}
 done
 
 # ── Check if all content is identical ─────────────────────────────────────────
-content_hash=$(echo "$all_content_hash" | compute_hash)
-# Simple check: if only one unique content hash, skip merge
+# Hash CLAUDE.md AND all memory file contents — not just CLAUDE.md
 unique_hashes=()
 for snapshot_file in "${SNAPSHOTS[@]}"; do
-  snapshot_hash=$(jq -r '.declarative.claude_md.content // ""' "$snapshot_file" | compute_hash)
+  snapshot_hash=$(jq -r '
+    (.declarative.claude_md.content // "") +
+    ([.experiential.auto_memory // {} | to_entries[] |
+      .value | to_entries[] | .value.content // ""] | join(""))
+  ' "$snapshot_file" | compute_hash)
   if [[ ! " ${unique_hashes[*]} " =~ " ${snapshot_hash} " ]]; then
     unique_hashes+=("$snapshot_hash")
   fi
@@ -184,6 +187,23 @@ ${claude_md_content}"
   tmp=$(brain_mktemp)
   jq --arg content "$fallback_claude_md" \
     '.declarative.claude_md.content = $content' "$OUTPUT" > "$tmp" && mv "$tmp" "$OUTPUT"
+
+  # Union memory files from other snapshots
+  for snapshot_file in "${SNAPSHOTS[@]:1}"; do
+    tmp=$(brain_mktemp)
+    jq -s '
+      .[0] as $base | .[1] as $other |
+      ($other.experiential.auto_memory // {}) as $other_mem |
+      reduce ($other_mem | to_entries[]) as $proj ($base;
+        reduce ($proj.value | to_entries[]) as $file (.;
+          if .experiential.auto_memory[$proj.key][$file.key] == null then
+            .experiential.auto_memory[$proj.key][$file.key] = $file.value
+          else . end
+        )
+      )
+    ' "$OUTPUT" "$snapshot_file" > "$tmp" && mv "$tmp" "$OUTPUT"
+  done
+
   rm -f "$PROMPT_FILE"
   exit 0
 }
@@ -194,8 +214,28 @@ merged_memory=$(echo "$RESULT" | jq '.structured_output.merged_memory_entries //
 conflicts=$(echo "$RESULT" | jq '.structured_output.conflicts // []')
 deduped=$(echo "$RESULT" | jq '.structured_output.deduped // []')
 
-# Start with first snapshot as base, apply semantic merges
+# Start with first snapshot as base, union all individual memory files first,
+# then overlay with LLM's merged content.
+# This ensures files from SNAPSHOTS[1..n] are never silently dropped —
+# the LLM only returns merged_memory_entries (MEMORY.md per project),
+# it does not enumerate every individual file under each project.
 cp "${SNAPSHOTS[0]}" "$OUTPUT"
+
+# Union individual memory files from all other snapshots into OUTPUT
+for snapshot_file in "${SNAPSHOTS[@]:1}"; do
+  tmp=$(brain_mktemp)
+  jq -s '
+    .[0] as $base | .[1] as $other |
+    ($other.experiential.auto_memory // {}) as $other_mem |
+    reduce ($other_mem | to_entries[]) as $proj ($base;
+      reduce ($proj.value | to_entries[]) as $file (.;
+        if .experiential.auto_memory[$proj.key][$file.key] == null then
+          .experiential.auto_memory[$proj.key][$file.key] = $file.value
+        else . end
+      )
+    )
+  ' "$OUTPUT" "$snapshot_file" > "$tmp" && mv "$tmp" "$OUTPUT"
+done
 
 # Update CLAUDE.md
 if [ -n "$merged_claude_md" ]; then

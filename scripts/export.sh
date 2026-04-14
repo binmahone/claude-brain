@@ -126,6 +126,11 @@ build_snapshot() {
   # Experiential: auto memory
   local auto_memory="{}"
   if [ -d "${CLAUDE_DIR}/projects" ]; then
+      # Emit {key, encoded, val} objects so the jq accumulator can detect name
+      # collisions (two different absolute paths that share the same basename, e.g.
+      # /home/alice/myproj and /work/myproj both decode to "myproj").
+      # On collision the second occurrence uses the encoded path as key so no data
+      # is silently overwritten.
       auto_memory=$(find "${CLAUDE_DIR}/projects" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | while read -r proj_dir; do
         local mem_dir="${proj_dir}/memory"
         if [ -d "$mem_dir" ] && [ "$(ls -A "$mem_dir" 2>/dev/null)" ]; then
@@ -135,9 +140,19 @@ build_snapshot() {
           name=$(project_name_from_encoded "$encoded")
           local entries
           entries=$(scan_dir_entries "$mem_dir")
-          jq -n --arg key "$name" --argjson val "$entries" '{($key): $val}'
+          jq -n --arg key "$name" --arg encoded "$encoded" --argjson val "$entries" \
+            '{key: $key, encoded: $encoded, val: $val}'
         fi
-      done | jq -s 'add // {}')
+      done | jq -s '
+        reduce .[] as $item ({};
+          if has($item.key) then
+            # Collision: fall back to encoded path as key so data is not lost
+            .[$item.encoded] = $item.val
+          else
+            .[$item.key] = $item.val
+          end
+        )
+      ')
   fi
 
   # Experiential: agent memory

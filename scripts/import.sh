@@ -187,13 +187,17 @@ import_brain() {
     echo "$brain" | jq -r '.experiential.auto_memory // {} | keys[]' 2>/dev/null | while read -r project; do
       local entries
       entries=$(echo "$brain" | jq --arg p "$project" '.experiential.auto_memory[$p] // {}')
-      # Find matching project dir
+      # Find matching project dir.
+      # The snapshot key is normally the decoded basename ("myproject"), but can be
+      # the encoded path ("-home-alice-myproject") when a name collision was detected
+      # at export time.  Match both cases.
       local target_dir=""
       if [ -d "${CLAUDE_DIR}/projects" ]; then
         for proj_dir in "${CLAUDE_DIR}"/projects/*/; do
-          local name
-          name=$(project_name_from_encoded "$(basename "$proj_dir")")
-          if [ "$name" = "$project" ]; then
+          local enc_base name
+          enc_base=$(basename "$proj_dir")
+          name=$(project_name_from_encoded "$enc_base")
+          if [ "$name" = "$project" ] || [ "$enc_base" = "$project" ]; then
             target_dir="${proj_dir}memory"
             break
           fi
