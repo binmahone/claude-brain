@@ -119,35 +119,45 @@ The Git remote URL is provided as: $ARGUMENTS
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/export.sh" --output ~/.claude/brain-repo/machines/${MACHINE_ID}/brain-snapshot.json
    ```
 
-9. Ask the user how to handle existing local data:
-   - **Merge** (recommended): Merge local brain into consolidated
-   - **Overwrite**: Replace local with consolidated brain
-   - **Keep local**: Keep local as-is, only add new items from consolidated
+9. Re-consolidate: now that the new machine's snapshot is in machines/, re-run the full
+    N-way merge across ALL machine snapshots (same logic as pull.sh) to produce a fresh
+    consolidated brain, then import it locally:
+    ```bash
+    snapshots=()
+    for f in ~/.claude/brain-repo/machines/*/brain-snapshot.json; do
+      [ -f "$f" ] && snapshots+=("$f")
+    done
 
-10. Based on choice, apply consolidated brain to local machine:
-    - **Merge** (recommended): Use merge-structured.sh to merge consolidated brain WITH local snapshot,
-      then apply the result locally via import.sh. The consolidated/brain.json is NOT modified —
-      only the local Claude files are updated. (Do NOT call merge-semantic.sh here — that is only
-      used by pull.sh for N-way merge of all machine snapshots during a full sync.)
-      ```bash
-      MERGED_OUTPUT=$(mktemp)
-      bash "${CLAUDE_PLUGIN_ROOT}/scripts/merge-structured.sh" \
-        ~/.claude/brain-repo/consolidated/brain.json \
-        ~/.claude/brain-repo/machines/${MACHINE_ID}/brain-snapshot.json \
-        "$MERGED_OUTPUT"
-      bash "${CLAUDE_PLUGIN_ROOT}/scripts/import.sh" "$MERGED_OUTPUT"
-      rm -f "$MERGED_OUTPUT"
-      ```
-    - **Overwrite**: Run import.sh directly with consolidated brain (do NOT write back to consolidated/brain.json)
-      ```bash
-      bash "${CLAUDE_PLUGIN_ROOT}/scripts/import.sh" ~/.claude/brain-repo/consolidated/brain.json
-      ```
-    - **Keep local**: Run import.sh but skip files that already exist locally
+    if [ ${#snapshots[@]} -eq 1 ]; then
+      cp "${snapshots[0]}" ~/.claude/brain-repo/consolidated/brain.json
+    else
+      # Pairwise structured merge across all snapshots
+      cp "${snapshots[0]}" ~/.claude/brain-repo/consolidated/brain.json.merging
+      for ((i=1; i<${#snapshots[@]}; i++)); do
+        bash "${CLAUDE_PLUGIN_ROOT}/scripts/merge-structured.sh" \
+          ~/.claude/brain-repo/consolidated/brain.json.merging \
+          "${snapshots[i]}" \
+          ~/.claude/brain-repo/consolidated/brain.json.merging
+      done
 
-11. Push the updated state (machines and meta ONLY — never commit consolidated/ during join):
+      # Semantic merge (N-way, all snapshots at once); falls back to structured if it fails
+      if bash "${CLAUDE_PLUGIN_ROOT}/scripts/merge-semantic.sh" \
+          ~/.claude/brain-repo/consolidated/brain.json \
+          "${snapshots[@]}"; then
+        rm -f ~/.claude/brain-repo/consolidated/brain.json.merging
+      else
+        mv ~/.claude/brain-repo/consolidated/brain.json.merging \
+           ~/.claude/brain-repo/consolidated/brain.json
+      fi
+    fi
+
+    bash "${CLAUDE_PLUGIN_ROOT}/scripts/import.sh" ~/.claude/brain-repo/consolidated/brain.json
+    ```
+
+11. Push the updated state:
     ```bash
     cd ~/.claude/brain-repo
-    git add machines/ meta/
+    git add machines/ consolidated/ meta/
     git commit -m "Join: $(hostname) joined brain network"
     git push origin main
     ```
