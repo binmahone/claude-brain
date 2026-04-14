@@ -79,15 +79,38 @@ def deep_merge:
 ($other.environmental.mcp_servers // {}) as $other_mcp |
 ($base_mcp * $other_mcp) as $merged_mcp |
 
-# Merge experiential: auto_memory (union projects, within project keep base for semantic merge)
+# Merge experiential: auto_memory — deep merge: union projects, within each project union files
+# Cannot use add/+ here: it shallow-merges objects, so same-named projects overwrite instead of merge
 ($base.experiential.auto_memory // {}) as $base_mem |
 ($other.experiential.auto_memory // {}) as $other_mem |
-([$base_mem, $other_mem] | add // {}) as $merged_mem |
+([$base_mem, $other_mem] |
+  .[0] as $a | .[1] as $b |
+  ($a | keys) + ($b | keys) | unique | map(
+    . as $proj |
+    if ($a | has($proj)) and ($b | has($proj)) then
+      {($proj): (($a[$proj] // {}) + ($b[$proj] // {}))}
+    elif ($a | has($proj)) then
+      {($proj): $a[$proj]}
+    else
+      {($proj): $b[$proj]}
+    end
+  ) | add // {}) as $merged_mem |
 
-# Merge experiential: agent_memory (union agents, keep base content for semantic merge)
+# Merge experiential: agent_memory — same deep merge pattern
 ($base.experiential.agent_memory // {}) as $base_amem |
 ($other.experiential.agent_memory // {}) as $other_amem |
-([$base_amem, $other_amem] | add // {}) as $merged_amem |
+([$base_amem, $other_amem] |
+  .[0] as $a | .[1] as $b |
+  ($a | keys) + ($b | keys) | unique | map(
+    . as $agent |
+    if ($a | has($agent)) and ($b | has($agent)) then
+      {($agent): (($a[$agent] // {}) + ($b[$agent] // {}))}
+    elif ($a | has($agent)) then
+      {($agent): $a[$agent]}
+    else
+      {($agent): $b[$agent]}
+    end
+  ) | add // {}) as $merged_amem |
 
 # Assemble merged brain
 $base * {
