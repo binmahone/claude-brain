@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Brain sync via Git (`/brain-init`, `/brain-join`, `/brain-sync`)
 - Semantic merge for CLAUDE.md and memory using `claude -p`
 - Structured merge for settings, keybindings, MCP configs
-- N-way merge support (laptop + desktop + cloud VM)
+- LLM-powered 2-way merge (consolidated + current snapshot); all machines converge intelligently
 - Auto-sync hooks on session start/end
 - Brain status and inventory (`/brain-status`)
 - Sync history log (`/brain-log`)

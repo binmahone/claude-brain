@@ -90,7 +90,7 @@ Two commands. Zero daily effort. Works forever.
 
 - **Auto-sync** — hooks run on every session start/end, zero effort
 - **Semantic merge** — LLM-powered deduplication of memory and CLAUDE.md (not just overwrite)
-- **N-way merge** — laptop + desktop + cloud VM all converge intelligently
+- **LLM-powered 2-way merge** — consolidated brain + current snapshot merged by Claude; laptop, desktop, and cloud VM all converge intelligently
 - **Encryption** — optional `age` encryption for brain snapshots at rest
 - **Team sharing** — share skills, agents, and rules with teammates
 - **Auto-evolve** — promotes stable patterns from memory to durable config
