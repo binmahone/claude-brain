@@ -285,10 +285,15 @@ check_llm_available() {
     log_error "Install it from: https://claude.ai/code"
     return 1
   fi
-  if ! claude --version &>/dev/null 2>&1; then
-    log_error "claude CLI is not responding. Check your installation and API key."
+  local probe_result
+  probe_result=$(echo "1" | claude -p - --max-turns 1 2>/dev/null) || {
+    log_error "claude CLI is not responding. Check your API key and network connection."
     return 1
-  fi
+  }
+  [ -z "$probe_result" ] && {
+    log_error "claude CLI returned empty response. Check your API key."
+    return 1
+  }
   return 0
 }
 
