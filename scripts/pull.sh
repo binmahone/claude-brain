@@ -94,12 +94,10 @@ else
   # Use merge-structured.sh for pairwise structured merge
   # Use a temp file per step to avoid BASE=OUTPUT truncation (shell truncates
   # the output file before jq opens the input when they share the same path)
-  local merge_tmp
   merge_tmp=$(brain_mktemp)
   cp "${snapshots[0]}" "$merge_tmp"
 
   for ((i=1; i<${#snapshots[@]}; i++)); do
-    local step_tmp
     step_tmp=$(brain_mktemp)
     "${SCRIPT_DIR}/merge-structured.sh" \
       "$merge_tmp" \

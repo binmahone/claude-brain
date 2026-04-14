@@ -22,7 +22,7 @@ fi
 
 if ! command -v claude &>/dev/null; then
   log_warn "claude CLI not found. Skipping semantic merge."
-  exit 0
+  exit 1  # Signal caller to use structured merge fallback — do NOT exit 0 without writing OUTPUT
 fi
 
 # ── Extract content to merge ───────────────────────────────────────────────────
@@ -184,6 +184,7 @@ ${claude_md_content}"
   tmp=$(brain_mktemp)
   jq --arg content "$fallback_claude_md" \
     '.declarative.claude_md.content = $content' "$OUTPUT" > "$tmp" && mv "$tmp" "$OUTPUT"
+  rm -f "$PROMPT_FILE"
   exit 0
 }
 
