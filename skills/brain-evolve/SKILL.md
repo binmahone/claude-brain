@@ -1,10 +1,8 @@
 ---
 name: brain-evolve
 description: Analyze accumulated brain memory and propose promotions to CLAUDE.md, rules, or new skills. Makes your brain smarter over time.
-user-invocable: true
-disable-model-invocation: true
-allowed-tools: Bash, Read, Write, Edit, AskUserQuestion
 ---
+
 
 The user wants to evolve their brain by promoting stable patterns from memory.
 

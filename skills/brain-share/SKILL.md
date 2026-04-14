@@ -1,11 +1,8 @@
 ---
 name: brain-share
 description: Share a skill, agent, or rule with the team by copying it to the shared namespace
-user-invocable: true
-disable-model-invocation: true
-argument-hint: "<type> <name>"
-allowed-tools: Bash, Read, Write
 ---
+
 
 Share an artifact with the team by copying it to the shared namespace.
 

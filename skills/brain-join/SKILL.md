@@ -1,11 +1,8 @@
 ---
 name: brain-join
 description: Join an existing brain sync network from another machine. Pulls the consolidated brain and merges with any local state.
-user-invocable: true
-disable-model-invocation: true
-argument-hint: "<git-remote-url>"
-allowed-tools: Bash, Read, Write, Edit, AskUserQuestion
 ---
+
 
 The user wants to join an existing brain network from this machine.
 

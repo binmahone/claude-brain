@@ -1,11 +1,8 @@
 ---
 name: brain-init
 description: Initialize brain sync network. Creates a Git remote for your brain and exports your current Claude Code state.
-user-invocable: true
-disable-model-invocation: true
-argument-hint: "<git-remote-url> [--encrypt]"
-allowed-tools: Bash, Read, Write, AskUserQuestion
 ---
+
 
 The user wants to initialize their Claude Brain sync network.
 

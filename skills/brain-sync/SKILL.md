@@ -1,10 +1,8 @@
 ---
 name: brain-sync
 description: Manually sync brain with remote. Exports local state, pushes to remote, pulls updates from other machines, merges, and applies.
-user-invocable: true
-disable-model-invocation: true
-allowed-tools: Bash, Read, Write, Edit
 ---
+
 
 The user wants to manually trigger a full brain sync cycle.
 

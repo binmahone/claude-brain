@@ -1,10 +1,8 @@
 ---
 name: brain-conflicts
 description: Review and resolve unresolved brain merge conflicts.
-user-invocable: true
-disable-model-invocation: true
-allowed-tools: Bash, Read, Write, Edit, AskUserQuestion
 ---
+
 
 The user wants to resolve pending brain merge conflicts.
 

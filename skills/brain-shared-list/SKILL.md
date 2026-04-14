@@ -1,10 +1,8 @@
 ---
 name: brain-shared-list
 description: List all shared skills, agents, and rules in the brain network.
-user-invocable: true
-disable-model-invocation: true
-allowed-tools: Bash, Read
 ---
+
 
 The user wants to see all shared artifacts in the brain network.
 

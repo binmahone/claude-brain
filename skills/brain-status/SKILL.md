@@ -1,10 +1,8 @@
 ---
 name: brain-status
 description: Show brain inventory, sync status, and network info across all machines.
-user-invocable: true
-disable-model-invocation: true
-allowed-tools: Bash, Read
 ---
+
 
 Show the user their brain status.
 

@@ -50,8 +50,9 @@ fi
 # Update machines.json with last sync time
 "${SCRIPT_DIR}/register-machine.sh" "$(get_config remote)"
 
-# Commit and push
-brain_git add "machines/${machine_id}/" "meta/machines.json" "shared/" 2>/dev/null || true
+# Commit and push (add paths separately so missing shared/ doesn't block others)
+brain_git add "machines/${machine_id}/" "meta/machines.json" 2>/dev/null || true
+brain_git add "shared/" 2>/dev/null || true
 brain_git commit -m "Sync: $(get_machine_name) (${machine_id}) at $(now_iso)" 2>/dev/null || {
   log_info "Nothing to commit."
   exit 0

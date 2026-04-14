@@ -1,10 +1,8 @@
 ---
 name: brain-log
 description: Show brain sync and evolution history.
-user-invocable: true
-disable-model-invocation: true
-allowed-tools: Bash, Read
 ---
+
 
 Show the user their brain's sync history.
 
