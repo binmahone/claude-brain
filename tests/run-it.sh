@@ -1300,6 +1300,211 @@ test_invalid_json_merge_preserves_original() {
   jq -e '.permissions.allow[0] == "bash"' "$beta_claude/settings.json" >/dev/null || return 1
 }
 
+# ══════════════════════════════════════════════════════════════════════════════
+# Rules, skills, settings, MCP tests
+# ══════════════════════════════════════════════════════════════════════════════
+
+# IT-21: Rules and skills written on alpha propagate to beta.
+test_rules_and_skills_sync() {
+  local tdir
+  tdir=$(make_test_env "it21")
+  setup_machine "$tdir" "alpha" "a021"
+  setup_machine "$tdir" "beta"  "b021"
+
+  local alpha_claude="$tdir/machines/alpha/home/.claude"
+  local beta_claude="$tdir/machines/beta/home/.claude"
+
+  # Alpha creates a rule and a skill
+  mkdir -p "$alpha_claude/rules" "$alpha_claude/skills/my-tool"
+  echo '# Always run tests before commit' > "$alpha_claude/rules/testing.md"
+  printf '%s\n' '---
+name: my-tool
+description: A useful tool
+---
+Do the thing.' > "$alpha_claude/skills/my-tool/SKILL.md"
+
+  sync_machine "$tdir" "alpha"
+  sync_machine "$tdir" "beta"
+
+  [ -f "$beta_claude/rules/testing.md" ] || return 1
+  grep -q "run tests" "$beta_claude/rules/testing.md" || return 1
+  [ -f "$beta_claude/skills/my-tool/SKILL.md" ] || return 1
+  grep -q "useful tool" "$beta_claude/skills/my-tool/SKILL.md" || return 1
+}
+
+# IT-22: Settings.json deep merge preserves both sides.
+test_settings_deep_merge() {
+  local tdir
+  tdir=$(make_test_env "it22")
+  setup_machine "$tdir" "alpha" "a022"
+  setup_machine "$tdir" "beta"  "b022"
+
+  local alpha_claude="$tdir/machines/alpha/home/.claude"
+  local beta_claude="$tdir/machines/beta/home/.claude"
+
+  # Alpha has permissions
+  echo '{"permissions":{"allow":["bash"]}}' > "$alpha_claude/settings.json"
+  # Beta has different setting
+  echo '{"hooks":{"enabled":true}}' > "$beta_claude/settings.json"
+
+  sync_machine "$tdir" "alpha"
+  sync_machine "$tdir" "beta"
+
+  # Beta should have both permissions (from alpha) and hooks (local)
+  jq -e '.permissions.allow[0] == "bash"' "$beta_claude/settings.json" >/dev/null || return 1
+  jq -e '.hooks.enabled == true' "$beta_claude/settings.json" >/dev/null || return 1
+}
+
+# IT-23: MCP server sync + summary highlights new servers.
+test_mcp_server_sync_and_summary() {
+  local tdir
+  tdir=$(make_test_env "it23")
+  setup_machine "$tdir" "alpha" "a023"
+  setup_machine "$tdir" "beta"  "b023"
+
+  local alpha_home="$tdir/machines/alpha/home"
+
+  # Alpha has an MCP server configured in ~/.claude.json
+  cat > "$alpha_home/.claude.json" <<JSON
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@anthropic/mcp-filesystem"],
+      "env": {"SECRET_KEY": "should-be-stripped"}
+    }
+  }
+}
+JSON
+
+  sync_machine "$tdir" "alpha"
+
+  # Beta syncs (no apply) and checks summary
+  sync_machine_no_apply "$tdir" "beta"
+  local summary
+  summary=$(get_summary "$tdir" "beta")
+
+  # Summary should show filesystem as new MCP server
+  echo "$summary" | jq -e '.mcp_servers_added | length > 0' >/dev/null || return 1
+  echo "$summary" | jq -e '.mcp_servers_added[] | select(. == "filesystem")' >/dev/null || return 1
+
+  # Now apply and verify MCP server is imported (without env/secret)
+  run_as "$tdir" "beta" bash "$BRAIN_SCRIPTS/sync.sh" --apply --quiet
+
+  local beta_home="$tdir/machines/beta/home"
+  jq -e '.mcpServers.filesystem.command == "npx"' "$beta_home/.claude.json" >/dev/null || return 1
+  # env should NOT be present (stripped during export)
+  jq -e '.mcpServers.filesystem.env == null' "$beta_home/.claude.json" >/dev/null || return 1
+}
+
+# IT-24: 3-way CLAUDE.md — only local changed, no conflict.
+test_3way_claude_md_outgoing() {
+  local tdir
+  tdir=$(make_test_env "it24")
+  setup_machine "$tdir" "alpha" "a024"
+  setup_machine "$tdir" "beta"  "b024"
+
+  # Both start with same CLAUDE.md
+  local shared_md="# Rules
+- Use TypeScript"
+  printf '%s\n' "$shared_md" > "$tdir/machines/alpha/home/.claude/CLAUDE.md"
+  printf '%s\n' "$shared_md" > "$tdir/machines/beta/home/.claude/CLAUDE.md"
+
+  sync_machine "$tdir" "alpha"
+  sync_machine "$tdir" "beta"
+
+  # Beta modifies CLAUDE.md, alpha doesn't
+  printf '%s\n' "# Rules
+- Use TypeScript
+- Always add tests" > "$tdir/machines/beta/home/.claude/CLAUDE.md"
+
+  sync_machine "$tdir" "beta"
+
+  # No conflict (3-way: only snapshot changed)
+  [ "$(conflict_count "$tdir" "beta")" -eq 0 ] || return 1
+
+  # Consolidated should have beta's updated version
+  local con="$tdir/machines/beta/home/.claude/brain-repo/consolidated/brain.json"
+  jq -r '.declarative.claude_md.content' "$con" | grep -q "Always add tests" || return 1
+}
+
+# IT-25: Machine without a project does NOT delete that project's memory
+# from consolidated (regression test for the 3-way merge fix).
+test_project_not_on_machine_preserved() {
+  local tdir
+  tdir=$(make_test_env "it25")
+  setup_machine "$tdir" "alpha" "a025"
+  setup_machine "$tdir" "beta"  "b025"
+
+  ensure_project "$tdir" "alpha" "-proj-shared"
+  ensure_project "$tdir" "beta"  "-proj-shared"
+  # Only beta has proj-beta-only
+  ensure_project "$tdir" "beta" "-proj-beta-only"
+
+  write_mem "$tdir" "beta" "-proj-beta-only" "secret.md" "beta private data"
+  write_mem "$tdir" "beta" "-proj-shared" "shared.md" "shared content"
+
+  sync_machine "$tdir" "beta"
+  sync_machine "$tdir" "alpha"  # alpha gets shared.md but not proj-beta-only (no dir)
+
+  # Alpha makes a local change and syncs again (triggers 3-way merge)
+  write_mem "$tdir" "alpha" "-proj-shared" "alpha-note.md" "alpha note"
+  sync_machine "$tdir" "alpha"
+
+  # Alpha's consolidated should still have beta's proj-beta-only memory
+  local con="$tdir/machines/alpha/home/.claude/brain-repo/consolidated/brain.json"
+  jq -e '.experiential.auto_memory["-proj-beta-only"]["secret.md"] != null' "$con" >/dev/null || return 1
+}
+
+# IT-26: Double apply is idempotent — running --apply twice doesn't break anything.
+test_double_apply_idempotent() {
+  local tdir
+  tdir=$(make_test_env "it26")
+  setup_machine "$tdir" "alpha" "a026"
+  setup_machine "$tdir" "beta"  "b026"
+
+  ensure_project "$tdir" "alpha" "-home-proj"
+  ensure_project "$tdir" "beta"  "-home-proj"
+
+  write_mem "$tdir" "alpha" "-home-proj" "data.md" "test content"
+  sync_machine "$tdir" "alpha"
+
+  # Beta syncs normally
+  run_as "$tdir" "beta" bash "$BRAIN_SCRIPTS/sync.sh" --quiet
+  run_as "$tdir" "beta" bash "$BRAIN_SCRIPTS/sync.sh" --apply --quiet
+
+  # Second apply — should be a no-op (same content, no crash)
+  run_as "$tdir" "beta" bash "$BRAIN_SCRIPTS/sync.sh" --apply --quiet
+
+  # Still works, data intact
+  has_mem "$tdir" "beta" "-home-proj" "data.md" || return 1
+  read_mem "$tdir" "beta" "-home-proj" "data.md" | grep -q "test content" || return 1
+}
+
+# IT-27: Outgoing-only push propagates to other machines.
+test_outgoing_push_propagates() {
+  local tdir
+  tdir=$(make_test_env "it27")
+  setup_machine "$tdir" "alpha" "a027"
+  setup_machine "$tdir" "beta"  "b027"
+
+  ensure_project "$tdir" "alpha" "-home-proj"
+  ensure_project "$tdir" "beta"  "-home-proj"
+
+  # Initial sync to establish baselines
+  sync_machine "$tdir" "alpha"
+  sync_machine "$tdir" "beta"
+
+  # Alpha writes something new (outgoing only)
+  write_mem "$tdir" "alpha" "-home-proj" "new-idea.md" "brilliant idea"
+  sync_machine "$tdir" "alpha"
+
+  # Beta syncs and should receive it
+  sync_machine "$tdir" "beta"
+  has_mem "$tdir" "beta" "-home-proj" "new-idea.md" || return 1
+  read_mem "$tdir" "beta" "-home-proj" "new-idea.md" | grep -q "brilliant idea" || return 1
+}
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 echo ""
 echo "=== claude-brain Integration Tests ==="
@@ -1328,6 +1533,16 @@ run_test test_3way_incoming_only
 run_test test_3way_real_conflict
 run_test test_3way_fallback_to_2way
 run_test test_baseline_saved_after_apply
+
+echo ""
+echo "--- Rules, skills, settings, MCP tests ---"
+run_test test_rules_and_skills_sync
+run_test test_settings_deep_merge
+run_test test_mcp_server_sync_and_summary
+run_test test_3way_claude_md_outgoing
+run_test test_project_not_on_machine_preserved
+run_test test_double_apply_idempotent
+run_test test_outgoing_push_propagates
 
 echo ""
 echo "--- Summary + safety tests ---"
