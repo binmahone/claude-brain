@@ -91,6 +91,12 @@ fi
 # Apply consolidated brain locally (with validation and backup)
 "${SCRIPT_DIR}/import.sh" "${BRAIN_REPO}/consolidated/brain.json"
 
+# Log the merge (before commit so it's included in the same commit)
+new_consolidated_hash=$(file_hash "${BRAIN_REPO}/consolidated/brain.json")
+if [ "$local_consolidated_hash" != "$new_consolidated_hash" ]; then
+  append_merge_log "pull+merge" "Merged consolidated brain"
+fi
+
 # Commit consolidated and push everything once (snapshot commit from snapshot.sh + consolidated)
 brain_git add consolidated/ meta/
 brain_git diff --cached --quiet 2>/dev/null || \
@@ -113,7 +119,7 @@ if [ -f "$DEFAULTS_FILE" ]; then
   evolve_interval_days="" last_evolved="" days_since_evolve=""
   evolve_interval_days=$(jq -r '.evolve_interval_days // 7' "$DEFAULTS_FILE")
   last_evolved=$(jq -r '.last_evolved // null' "$BRAIN_CONFIG")
-  
+
   if [ "$last_evolved" = "null" ] || [ -z "$last_evolved" ]; then
     # Never evolved, set to now to start the timer
     local_tmp=$(brain_mktemp)
@@ -126,7 +132,7 @@ if [ -f "$DEFAULTS_FILE" ]; then
       last_evolved_ts=$(date -d "$last_evolved" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%SZ" "$last_evolved" +%s 2>/dev/null || echo "0")
       current_ts=$(date +%s)
       days_since_evolve=$(( (current_ts - last_evolved_ts) / 86400 ))
-      
+
       if [ "$days_since_evolve" -ge "$evolve_interval_days" ]; then
         log_info "Auto-evolve due (${days_since_evolve} days since last evolution)..."
         "${SCRIPT_DIR}/evolve.sh" --auto 2>/dev/null || {
@@ -137,10 +143,7 @@ if [ -f "$DEFAULTS_FILE" ]; then
   fi
 fi
 
-# Log the merge
-new_consolidated_hash=$(file_hash "${BRAIN_REPO}/consolidated/brain.json")
 if [ "$local_consolidated_hash" != "$new_consolidated_hash" ]; then
-  append_merge_log "pull+merge" "Merged consolidated brain"
   log_info "Brain synced: consolidated brain updated."
 else
   log_info "Brain synced: no changes."

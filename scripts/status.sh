@@ -106,7 +106,7 @@ echo "  Memory files:   ${memory_files} (across all projects)"
 if [ -d "${CLAUDE_DIR}/projects" ]; then
   for proj_dir in "${CLAUDE_DIR}"/projects/*/; do
     if [ -d "${proj_dir}memory" ] && [ "$(ls -A "${proj_dir}memory" 2>/dev/null)" ]; then
-      local_name=$(project_name_from_encoded "$(basename "$proj_dir")")
+      local_name=$(basename "$proj_dir" | sed 's/.*-//')
       local_count=$(count_files "${proj_dir}memory" "*")
       echo "    ${local_name}: ${local_count} files"
     fi

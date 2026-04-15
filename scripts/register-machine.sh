@@ -49,7 +49,7 @@ register_machine() {
         local encoded
         encoded=$(basename "$dir")
         local name
-        name=$(project_name_from_encoded "$encoded")
+        name=$(echo "$encoded" | sed 's/.*-//')
         jq -n --arg encoded "$encoded" --arg name "$name" '{"encoded": $encoded, "name": $name}'
       done | jq -s '.' 2>/dev/null || echo "[]")
     else

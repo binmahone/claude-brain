@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# merge.sh — Brain merge: union for non-conflicting items, LLM for conflicts.
+# merge.sh — Brain merge: union for non-conflicting items, defer conflicts.
 #
 # Rules:
-#   Only one side has a file  → include it (no LLM needed)
-#   Both sides, same content  → keep as-is (no LLM needed)
-#   Both sides, different     → LLM merge (only that file's content sent)
+#   Only one side has a file  → include it (no conflict)
+#   Both sides, same content  → keep as-is (no conflict)
+#   Both sides, different     → keep consolidated version, record conflict
 #
-# Per-project context isolation: each project's conflicts are a separate LLM call.
-# Group sync runs last: files missing from a group member are copied in; conflicts → LLM.
+# Conflicts are written to $CONFLICTS_FILE (brain-conflicts.json) for later
+# resolution by resolve-conflicts.sh or the /brain-conflicts skill.
 #
 # Usage: merge.sh BASE OTHER OUTPUT
 #   BASE   — consolidated brain (other machines' merged state)
@@ -26,7 +26,61 @@ if [ ! -f "$BASE" ] || [ ! -f "$OTHER" ]; then
   exit 1
 fi
 
-check_llm_available || exit 1
+# ── Conflict tracking ─────────────────────────────────────────────────────────
+CONFLICTS_FILE="${CONFLICTS_FILE:-${HOME}/.claude/brain-conflicts.json}"
+_conflict_count=0
+
+# Record a conflict for later resolution.
+# Writes directly to CONFLICTS_FILE (survives subshell exits, unlike arrays
+# or brain_mktemp files which get cleaned up by the EXIT trap in subshells).
+record_conflict() {
+  local section="$1" filename="$2" base_content="$3" other_content="$4"
+  local machine_id machine_name timestamp
+  machine_id=$(jq -r '.machine.id // "unknown"' "$OTHER")
+  machine_name=$(jq -r '.machine.name // "unknown"' "$OTHER")
+  timestamp=$(now_iso)
+
+  # Initialize file if needed
+  if [ ! -f "$CONFLICTS_FILE" ]; then
+    echo '{"conflicts":[]}' > "$CONFLICTS_FILE"
+  fi
+
+  local entry
+  entry=$(jq -n \
+    --arg s "$section" --arg f "$filename" \
+    --arg bc "$base_content" --arg oc "$other_content" \
+    --arg mid "$machine_id" --arg mn "$machine_name" \
+    --arg ts "$timestamp" \
+    '{
+      section: $s,
+      filename: $f,
+      consolidated_content: $bc,
+      local_content: $oc,
+      machine_id: $mid,
+      machine_name: $mn,
+      detected_at: $ts,
+      resolved: false
+    }')
+
+  # Append directly — use a lock-free approach (single-writer assumption)
+  local tmp_cf
+  tmp_cf=$(mktemp "${CONFLICTS_FILE}.XXXXXX")
+  jq --argjson e "$entry" '.conflicts = [$e] + .conflicts' \
+    "$CONFLICTS_FILE" > "$tmp_cf" && mv "$tmp_cf" "$CONFLICTS_FILE"
+
+  log_info "Conflict detected: ${section}/${filename} — deferred for resolution."
+}
+
+# Report conflict count at end of merge.
+report_conflicts() {
+  if [ -f "$CONFLICTS_FILE" ]; then
+    local count
+    count=$(jq '[.conflicts[] | select(.resolved != true)] | length' "$CONFLICTS_FILE")
+    if [ "$count" -gt 0 ]; then
+      log_info "${count} conflict(s) pending. Run /brain-conflicts to resolve."
+    fi
+  fi
+}
 
 # ── Quick exit if identical ────────────────────────────────────────────────────
 if [ "$(file_hash "$BASE")" = "$(file_hash "$OTHER")" ]; then
@@ -35,42 +89,12 @@ if [ "$(file_hash "$BASE")" = "$(file_hash "$OTHER")" ]; then
   exit 0
 fi
 
-# ── LLM merge helper ──────────────────────────────────────────────────────────
-# Usage: llm_merge_text LABEL BASE_CONTENT OTHER_CONTENT
-# Prints merged content to stdout. Exits non-zero if LLM call fails.
-llm_merge_text() {
-  local label="$1" bc="$2" oc="$3"
-  local prompt_file result merged
-
-  prompt_file=$(brain_mktemp)
-  cat > "$prompt_file" << PROMPT
-Merge the two versions of \`${label}\` below into one.
-- Remove duplicate content.
-- Keep all unique information from both versions.
-- Resolve conflicts using your judgment — prefer more specific or recent wording.
-- Return only the merged content. No commentary, no explanation.
-
-## Consolidated version:
-${bc}
-
-## Current machine version:
-${oc}
-PROMPT
-
-  result=$(cat "$prompt_file" | claude -p - \
-    --output-format json \
-    --json-schema '{"type":"object","properties":{"merged_content":{"type":"string"}},"required":["merged_content"]}' \
-    --model sonnet --max-turns 1 2>/dev/null) || { rm -f "$prompt_file"; return 1; }
-  rm -f "$prompt_file"
-
-  merged=$(echo "$result" | jq -r '.structured_output.merged_content // empty')
-  [ -n "$merged" ] && printf '%s' "$merged" || return 1
-}
-
 # ── Merge a set of files ───────────────────────────────────────────────────────
 # Usage: merge_fileset BASE_JSON OTHER_JSON LABEL
 # BASE_JSON / OTHER_JSON are objects: { "filename": { "content": "...", "hash": "..." } }
 # Prints merged JSON object to stdout.
+# Non-conflicting files are unioned. Conflicts keep the consolidated (BASE)
+# version and are recorded for later resolution.
 merge_fileset() {
   local base_json="$1" other_json="$2" label="$3"
 
@@ -95,17 +119,11 @@ merge_fileset() {
 
   while IFS= read -r key; do
     [ -z "$key" ] && continue
-    local bc oc mc
+    local bc oc
     bc=$(jq -rn --argjson b "$base_json" --arg k "$key" '$b[$k].content // ""')
     oc=$(jq -rn --argjson o "$other_json" --arg k "$key" '$o[$k].content // ""')
-
-    log_info "LLM: merging ${label}/${key}..."
-    if mc=$(llm_merge_text "${label}/${key}" "$bc" "$oc"); then
-      merged=$(jq --arg k "$key" --arg c "$mc" \
-        '.[$k] = {content: $c, hash: "merged"}' <<< "$merged")
-    else
-      log_warn "LLM merge failed for ${label}/${key} — keeping consolidated version."
-    fi
+    record_conflict "$label" "$key" "$bc" "$oc"
+    # Consolidated (BASE) version stays in merged — will be updated when conflict is resolved
   done <<< "$conflict_keys"
 
   echo "$merged"
@@ -119,10 +137,12 @@ bc=$(jq -r '.declarative.claude_md.content // ""' "$BASE")
 oc=$(jq -r '.declarative.claude_md.content // ""' "$OTHER")
 if [ -n "$oc" ] && [ "$bc" != "$oc" ]; then
   if [ -z "$bc" ]; then
+    # Only snapshot has it — use snapshot's version (no conflict)
     mc="$oc"
   else
-    log_info "LLM: merging CLAUDE.md..."
-    mc=$(llm_merge_text "CLAUDE.md" "$bc" "$oc") || mc="$bc"
+    # Both have it with different content — conflict
+    record_conflict "claude_md" "CLAUDE.md" "$bc" "$oc"
+    mc="$bc"  # keep consolidated for now
   fi
   tmp=$(brain_mktemp)
   jq --arg c "$mc" \
@@ -188,7 +208,7 @@ tmp=$(brain_mktemp)
 jq --argjson v "$merged_amem" '.experiential.agent_memory = $v' \
   "$OUTPUT" > "$tmp" && mv "$tmp" "$OUTPUT"
 
-# ── 8. Project groups (config union — no LLM needed) ─────────────────────────
+# ── 8. Project groups (config union — no conflict possible) ──────────────────
 base_g=$(jq '.declarative.project_groups // {}' "$BASE")
 other_g=$(jq '.declarative.project_groups // {}' "$OTHER")
 merged_g=$(jq -n --argjson a "$base_g" --argjson b "$other_g" '
@@ -200,7 +220,7 @@ tmp=$(brain_mktemp)
 jq --argjson v "$merged_g" '.declarative.project_groups = $v' \
   "$OUTPUT" > "$tmp" && mv "$tmp" "$OUTPUT"
 
-# ── 9. Settings / keybindings / MCP (structured config — deep merge, no LLM) ─
+# ── 9. Settings / keybindings / MCP (structured config — deep merge) ─────────
 tmp=$(brain_mktemp)
 jq -s '
   def deep_merge:
@@ -226,9 +246,9 @@ jq -s '
 
 # ── 10. Group bidirectional sync ──────────────────────────────────────────────
 # Run after all same-key merges. For each group:
-#   - File only one member has → copy to all others (no LLM)
-#   - File multiple members have with same content → copy to missing members (no LLM)
-#   - File multiple members have with different content → LLM merge, apply to all
+#   - File only one member has → copy to all others (no conflict)
+#   - File multiple members have with same content → copy to missing members
+#   - File multiple members have with different content → record conflict, keep first version
 
 # Union groups from merged output + local config
 final_groups=$(jq '.declarative.project_groups // {}' "$OUTPUT")
@@ -296,18 +316,13 @@ if [ "$(echo "$final_groups" | jq 'length')" -gt 0 ]; then
             '.[$m][$f] = {content: $c, hash: "group-synced"}')
         done
       else
-        # Conflict within group: sequential LLM merge, then apply to all members
-        log_info "LLM: merging group ${gname}/${fname}..."
+        # Conflict within group — record it, keep first version for all
+        record_conflict "group/${gname}" "$fname" "${contents[0]}" "${contents[1]}"
         mc="${contents[0]}"
-        for ((i=1; i<${#contents[@]}; i++)); do
-          mc=$(llm_merge_text "group ${gname}/${fname}" "$mc" "${contents[$i]}") \
-            || { mc="${contents[0]}"; log_warn "LLM group merge failed for ${gname}/${fname} — using first version."; break; }
-        done
-        # Apply merged content to all group members (including those that didn't have the file)
         for m in "${existing[@]}"; do
           cur_mem=$(echo "$cur_mem" | jq \
             --arg m "$m" --arg f "$fname" --arg c "$mc" \
-            '.[$m][$f] = {content: $c, hash: "merged"}')
+            '.[$m][$f] = {content: $c, hash: "conflict-pending"}')
         done
       fi
     done <<< "$all_fnames"
@@ -317,5 +332,8 @@ if [ "$(echo "$final_groups" | jq 'length')" -gt 0 ]; then
   jq --argjson v "$cur_mem" '.experiential.auto_memory = $v' \
     "$OUTPUT" > "$tmp" && mv "$tmp" "$OUTPUT"
 fi
+
+# ── Report conflicts ──────────────────────────────────────────────────────────
+report_conflicts
 
 log_info "Merge complete."

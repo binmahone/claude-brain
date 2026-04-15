@@ -280,20 +280,14 @@ now_iso() {
 
 # ── Dependency Check ───────────────────────────────────────────────────────────
 check_llm_available() {
+  # Only check that the CLI binary exists. Do NOT probe with `claude -p` —
+  # that starts a full session which can trigger hooks (including brain-sync),
+  # causing recursive merges and data corruption.
   if ! command -v claude &>/dev/null; then
     log_error "claude CLI not found. Brain sync requires Claude Code CLI."
     log_error "Install it from: https://claude.ai/code"
     return 1
   fi
-  local probe_result
-  probe_result=$(echo "1" | claude -p - --max-turns 1 2>/dev/null) || {
-    log_error "claude CLI is not responding. Check your API key and network connection."
-    return 1
-  }
-  [ -z "$probe_result" ] && {
-    log_error "claude CLI returned empty response. Check your API key."
-    return 1
-  }
   return 0
 }
 
@@ -578,28 +572,3 @@ list_backups() {
   fi
 }
 
-# ── Path Encoding/Decoding ─────────────────────────────────────────────────────
-# Claude Code encodes project paths: /home/user/my-project → -home-user-my--project
-# Hyphens in names are doubled: my-project → my--project
-# Leading slash becomes leading hyphen
-decode_project_path() {
-  local encoded="$1"
-  # First restore leading slash, then un-double hyphens temporarily,
-  # then convert remaining single hyphens to slashes, then restore hyphens
-  echo "$encoded" | sed 's/^-/\//' | sed 's/--/\x00/g' | sed 's/-/\//g' | sed 's/\x00/-/g'
-}
-
-encode_project_path() {
-  local path="$1"
-  # Double any hyphens in the path first, then convert slashes to hyphens
-  echo "$path" | sed 's/-/--/g' | sed 's/\//-/g'
-}
-
-# Extract a human-friendly project name from encoded path
-project_name_from_encoded() {
-  local encoded="$1"
-  # Take the last segment of the decoded path
-  local decoded
-  decoded=$(decode_project_path "$encoded")
-  basename "$decoded"
-}

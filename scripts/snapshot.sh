@@ -32,9 +32,13 @@ $QUIET && export_args+=(--quiet)
 $SKIP_SECRET_SCAN && export_args+=(--skip-secret-scan)
 "${SCRIPT_DIR}/export.sh" "${export_args[@]}"
 
-# Check if anything actually changed
+# Check if anything actually changed (diff for tracked, status for untracked)
 if ! $FORCE && ! $DRY_RUN; then
-  if brain_git diff --quiet -- "machines/${machine_id}/" 2>/dev/null; then
+  has_tracked_changes=false
+  has_untracked_files=false
+  brain_git diff --quiet -- "machines/${machine_id}/" 2>/dev/null || has_tracked_changes=true
+  [ -n "$(brain_git ls-files --others -- "machines/${machine_id}/" 2>/dev/null)" ] && has_untracked_files=true
+  if ! $has_tracked_changes && ! $has_untracked_files; then
     log_info "No changes to commit."
     exit 0
   fi
