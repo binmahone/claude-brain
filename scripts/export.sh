@@ -170,7 +170,7 @@ build_snapshot() {
 
   local settings_hash="null"
   if [ "$settings" != "null" ]; then
-    settings_hash=$(echo "$settings" | compute_hash)
+    settings_hash=$(echo "$settings" | jq -S '.' | compute_hash)
   fi
 
   # Environmental: keybindings
@@ -269,7 +269,8 @@ if ! $SKIP_SECRET_SCAN; then
 fi
 
 # Compute content hash for change detection (exclude volatile fields)
-snapshot_hash=$(echo "$snapshot" | jq 'del(.exported_at, .snapshot_hash)' | compute_hash)
+# -S sorts keys so JSON key order differences don't affect the hash
+snapshot_hash=$(echo "$snapshot" | jq -S 'del(.exported_at, .snapshot_hash)' | compute_hash)
 
 snapshot=$(echo "$snapshot" | jq --arg h "sha256:${snapshot_hash}" '. + {snapshot_hash: $h}')
 
