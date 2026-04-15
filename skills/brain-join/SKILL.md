@@ -24,20 +24,35 @@ The Git remote URL is provided as: $ARGUMENTS
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/status.sh"
    ```
 
-4. **Show security notice:**
+4. **Check if this machine is already in the network:**
+   ```bash
+   if [ -f ~/.claude/brain-config.json ] && [ -d ~/.claude/brain-repo ]; then
+     EXISTING_REMOTE=$(jq -r '.remote_url // empty' ~/.claude/brain-config.json 2>/dev/null)
+     if [ -n "$EXISTING_REMOTE" ]; then
+       echo "ALREADY_JOINED: $EXISTING_REMOTE"
+     fi
+   fi
+   ```
+   If the machine is already joined:
+   - Tell the user: "This machine is already part of the brain network (remote: `<existing_remote>`)."
+   - If the remote URL matches `$ARGUMENTS`, suggest: "Run `/brain-sync` to sync with the network."
+   - If the remote URL is **different** from `$ARGUMENTS`, warn the user and ask if they want to switch networks (this will overwrite the existing config).
+   - **Stop here** unless the user explicitly confirms they want to re-join.
+
+5. **Show security notice:**
    - "Joining a brain network means:"
    - "  - Your local brain data will be PUSHED to the remote repository"
    - "  - Remote brain data (skills, agents, rules) can be IMPORTED to your machine (with your approval)"
    - ""
    - "Only join brain networks you trust — imported skills and agents execute with Claude's permissions."
 
-5. Clone the brain repo:
+6. Clone the brain repo:
    ```bash
    git clone "$ARGUMENTS" ~/.claude/brain-repo
    ```
    If the directory exists, do `git -C ~/.claude/brain-repo pull origin main` instead.
 
-6. Check if the network uses encryption:
+7. Check if the network uses encryption:
    ```bash
    # Check for recipients file indicating encryption
    if [ -f ~/.claude/brain-repo/meta/recipients.txt ]; then
@@ -102,7 +117,7 @@ The Git remote URL is provided as: $ARGUMENTS
    fi
    ```
 
-7. Register this machine:
+8. Register this machine:
    ```bash
    if [ -n "$REGISTER_FLAGS" ]; then
      bash "${CLAUDE_PLUGIN_ROOT}/scripts/register-machine.sh" "$ARGUMENTS" $REGISTER_FLAGS
@@ -111,7 +126,7 @@ The Git remote URL is provided as: $ARGUMENTS
    fi
    ```
 
-8. Export local snapshot, commit immediately, then pull --rebase to sync with remote.
+9. Export local snapshot, commit immediately, then pull --rebase to sync with remote.
    Committing before pull ensures our snapshot is not overwritten by git's merge:
    ```bash
    MACHINE_ID=$(cat ~/.claude/brain-config.json | jq -r '.machine_id')
@@ -128,7 +143,7 @@ The Git remote URL is provided as: $ARGUMENTS
    }
    ```
 
-9. Merge this machine's snapshot into the consolidated brain (2-way):
+10. Merge this machine's snapshot into the consolidated brain (2-way):
    ```bash
    CURRENT_SNAPSHOT="${HOME}/.claude/brain-repo/machines/${MACHINE_ID}/brain-snapshot.json"
    CONSOLIDATED="${HOME}/.claude/brain-repo/consolidated/brain.json"
@@ -147,7 +162,7 @@ The Git remote URL is provided as: $ARGUMENTS
    fi
    ```
 
-10. **Show the user what will be imported before applying.**
+11. **Show the user what will be imported before applying.**
     Get the change summary:
     ```bash
     bash "${CLAUDE_PLUGIN_ROOT}/scripts/sync.sh" --summary
@@ -155,7 +170,7 @@ The Git remote URL is provided as: $ARGUMENTS
     Present the summary: new/changed rules, skills, agents, memory, settings.
     **If `mcp_servers_added` is non-empty, highlight it.**
 
-11. If there are conflicts, read and present each one inline:
+12. If there are conflicts, read and present each one inline:
     ```bash
     cat ~/.claude/brain-conflicts.json 2>/dev/null || echo '{"conflicts":[]}'
     ```
@@ -163,9 +178,9 @@ The Git remote URL is provided as: $ARGUMENTS
     - **Keep consolidated** / **Keep local** / **Custom** / **Skip**
     Mark resolved conflicts in brain-conflicts.json and update the consolidated brain.
 
-12. **Ask the user for approval**: "Apply these changes to your local Claude Code config and push?"
+13. **Ask the user for approval**: "Apply these changes to your local Claude Code config and push?"
 
-13. If the user approves, import, save baseline, and push:
+14. If the user approves, import, save baseline, and push:
     ```bash
     bash "${CLAUDE_PLUGIN_ROOT}/scripts/import.sh" "$CONSOLIDATED"
 
@@ -179,7 +194,7 @@ The Git remote URL is provided as: $ARGUMENTS
     ```
     Tell the user: "A backup of your pre-join state was saved to ~/.claude/brain-backups/."
 
-14. If the user declines, skip import. Still commit and push the snapshot only:
+15. If the user declines, skip import. Still commit and push the snapshot only:
     ```bash
     cd ~/.claude/brain-repo
     git push origin main
@@ -187,7 +202,7 @@ The Git remote URL is provided as: $ARGUMENTS
     Tell the user:
     "Skipped import. Your machine is registered and snapshot pushed, but no remote changes were applied locally. Run /brain-sync to review and apply later."
 
-15. Confirm success:
+16. Confirm success:
     - Show how many machines are now in the network
     - Show what was imported/merged (or note that import was skipped)
     - Note: "Sync is manual — run /brain-sync to pull and apply changes from other machines."
