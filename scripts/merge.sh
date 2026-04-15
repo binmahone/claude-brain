@@ -285,6 +285,16 @@ while IFS= read -r proj; do
   [ -z "$proj" ] && continue
   bp=$(jq -n --argjson m "$base_mem"     --arg k "$proj" '$m[$k] // {}')
   op=$(jq -n --argjson m "$other_mem"    --arg k "$proj" '$m[$k] // {}')
+
+  # If this project has no memory in the snapshot (machine doesn't have this project),
+  # preserve the consolidated version as-is. Don't let 3-way merge interpret
+  # "project not on this machine" as "user deleted all files in this project".
+  if [ "$op" = "{}" ] && [ "$bp" != "{}" ]; then
+    merged_mem=$(jq -n --argjson acc "$merged_mem" --arg k "$proj" --argjson v "$bp" \
+      '$acc + {($k): $v}')
+    continue
+  fi
+
   ap=$(jq -n --argjson m "$ancestor_mem" --arg k "$proj" '$m[$k] // {}')
   mp=$(merge_fileset "$bp" "$op" "memory/${proj}" "$ap")
   merged_mem=$(jq -n --argjson acc "$merged_mem" --arg k "$proj" --argjson v "$mp" \
@@ -311,6 +321,15 @@ while IFS= read -r agent; do
   [ -z "$agent" ] && continue
   ba=$(jq -n --argjson m "$base_amem"     --arg k "$agent" '$m[$k] // {}')
   oa=$(jq -n --argjson m "$other_amem"    --arg k "$agent" '$m[$k] // {}')
+
+  # Same guard as auto_memory: don't delete agent memory just because
+  # this machine's snapshot doesn't have it.
+  if [ "$oa" = "{}" ] && [ "$ba" != "{}" ]; then
+    merged_amem=$(jq -n --argjson acc "$merged_amem" --arg k "$agent" --argjson v "$ba" \
+      '$acc + {($k): $v}')
+    continue
+  fi
+
   aa=$(jq -n --argjson m "$ancestor_amem" --arg k "$agent" '$m[$k] // {}')
   ma=$(merge_fileset "$ba" "$oa" "agent-memory/${agent}" "$aa")
   merged_amem=$(jq -n --argjson acc "$merged_amem" --arg k "$agent" --argjson v "$ma" \
