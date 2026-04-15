@@ -39,7 +39,7 @@ bash tests/run-tests.sh
 scripts/          # Core logic (Shell scripts)
 skills/           # User-facing commands (/brain-*)
 agents/           # Merge specialist agent
-hooks/            # Session start/end auto-sync
+hooks/            # Hook definitions (currently empty — sync is manual)
 templates/        # LLM prompt templates
 config/           # Default configuration
 tests/            # Integration test suite

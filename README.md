@@ -1,13 +1,13 @@
 <p align="center">
   <h1 align="center">claude-brain</h1>
   <p align="center">
-    <strong>Sync your Claude Code brain across machines — portable, automatic, intelligent.</strong>
+    <strong>Sync your Claude Code brain across machines — portable, intelligent, user-controlled.</strong>
   </p>
   <p align="center">
     <a href="docs/i18n/README.zh.md">🇨🇳 中文</a>
   </p>
   <p align="center">
-    <b>claude-brain</b> is a Claude Code plugin for <b>brain sync</b> — sync Claude Code memory, skills, agents, rules, and settings across all your machines with semantic merge. Cross-machine, portable, zero daily effort.
+    <b>claude-brain</b> is a Claude Code plugin for <b>brain sync</b> — sync Claude Code memory, skills, agents, rules, and settings across all your machines with semantic merge. Cross-machine, portable, and always under your control.
   </p>
   <p align="center">
     <a href="https://github.com/toroleapinc/claude-brain/stargazers"><img src="https://img.shields.io/github/stars/toroleapinc/claude-brain?style=social" alt="Stars"></a>
@@ -31,21 +31,15 @@
 # Machine B (home desktop) — join existing brain
 > /brain-join git@github.com:you/my-brain.git
 ✓ Pulled brain: 42 memory entries, 3 skills, 5 rules
-✓ Merged with local state
-✓ Auto-sync enabled
+✓ Merged with local state — review changes with /brain-sync
 
-# Later... check sync status from any machine
-> /brain-status
-=== Claude Brain Status ===
-Machine: home-desktop (b7f2...)
-Remote:  git@github.com:you/my-brain.git
-Last push: 2 minutes ago
-Last pull: 2 minutes ago
-Status:  Clean
+# Later... sync from any machine
+> /brain-sync
+✓ 2 incoming changes (1 rule, 1 skill). Apply? [y/n]
 ```
 
 <p align="center">
-  <em>Two commands. Zero daily effort. Works forever.</em>
+  <em>Two commands to set up. One command to sync. You approve every change.</em>
 </p>
 
 ---
@@ -67,14 +61,15 @@ Every time you switch machines, you lose context. You re-teach Claude the same t
 # Machine B (home desktop)
 > /brain-join git@github.com:you/my-brain.git
 ✓ Pulled brain: 42 memory entries, 3 skills, 5 rules
-✓ Merged with local state
-✓ Auto-sync enabled
+✓ Changes ready for review
 
-# That's it. Every session start/end syncs automatically.
-# Your brain follows you.
+> /brain-sync
+✓ 2 incoming changes: 1 new rule, 1 updated skill
+✓ Apply? Yes
+✓ Applied and pushed.
 ```
 
-Two commands. Zero daily effort. Works forever.
+Two commands to set up. `/brain-sync` when you switch machines. You review and approve every change before it touches your config.
 
 ## Why claude-brain?
 
@@ -82,19 +77,19 @@ Two commands. Zero daily effort. Works forever.
 |------|-------------|----------------------|
 | **claude-mem** | Enhances memory on one machine | Syncs your *entire brain* across all machines |
 | **chezmoi / dotfiles** | Copies config files | **Intelligently merges** knowledge — resolves contradictions, deduplicates |
-| **Manual CLAUDE.md copy** | Works but tedious | Auto-syncs silently on every session start/end |
+| **Manual CLAUDE.md copy** | Works but tedious | One-command sync with change review and approval |
 
 **No other tool does cross-machine semantic merge of Claude Code's brain state.**
 
 ## Key Features
 
-- **Auto-sync** — hooks run on every session start/end, zero effort
+- **Manual sync with approval** — you trigger `/brain-sync`, review changes, approve before apply
 - **Semantic merge** — LLM-powered deduplication of memory and CLAUDE.md (not just overwrite)
 - **LLM-powered 2-way merge** — consolidated brain + current snapshot merged by Claude; laptop, desktop, and cloud VM all converge intelligently
 - **Encryption** — optional `age` encryption for brain snapshots at rest
 - **Team sharing** — share skills, agents, and rules with teammates
-- **Auto-evolve** — promotes stable patterns from memory to durable config
-- **Security-first** — secrets stripped, env vars excluded, private repo enforced
+- **Evolve** — analyze memory and promote stable patterns to CLAUDE.md or rules
+- **Security-first** — secrets stripped, env vars excluded, private repo enforced, backups before every import
 - **Dirt cheap** — ~$0.50-2.00/month typical usage via `claude -p`
 
 ## Quick Start
@@ -125,7 +120,7 @@ Two commands. Zero daily effort. Works forever.
 /brain-init git@github.com:you/my-brain.git --encrypt
 ```
 
-Done. Auto-sync handles everything from here.
+Done. Run `/brain-sync` whenever you want to pull changes from other machines.
 
 ## Commands
 
@@ -133,10 +128,10 @@ Done. Auto-sync handles everything from here.
 |---------|-------------|
 | `/brain-init <remote>` | Initialize brain network with a Git remote |
 | `/brain-join <remote>` | Join an existing brain network |
+| `/brain-sync` | Sync with remote — shows changes for your approval before applying |
 | `/brain-status` | Show brain inventory and sync status |
-| `/brain-sync` | Manually trigger full sync cycle |
-| `/brain-evolve` | Promote stable patterns from memory to config |
-| `/brain-conflicts` | Review and resolve merge conflicts |
+| `/brain-evolve` | Analyze memory and propose promotions to CLAUDE.md or rules |
+| `/brain-conflicts` | Resolve merge conflicts skipped during sync/join |
 | `/brain-share <type> <name>` | Share a skill, agent, or rule with the team |
 | `/brain-shared-list` | List all shared artifacts in the network |
 | `/brain-log` | Show sync history |
@@ -176,11 +171,16 @@ Machine A              Machine B              Machine C
                  └──────────────────────┘
 ```
 
-No central server. Git handles transport. Each machine merges on pull.
+No central server. Git handles transport. You run `/brain-sync` to pull, merge, review, and push.
 
 **Merge strategy:**
-- **Structured data** (settings, keybindings, MCP) → deterministic JSON deep-merge (free)
-- **Unstructured data** (memory, CLAUDE.md) → LLM-powered semantic merge via `claude -p` (~$0.01-0.05)
+- **Structured data** (settings, keybindings, MCP) -> deterministic JSON deep-merge (free)
+- **Unstructured data** (memory, CLAUDE.md) -> LLM-powered semantic merge via `claude -p` (~$0.01-0.05)
+
+**Sync flow:**
+1. `/brain-sync` exports your current state, pulls remote changes, merges
+2. Shows you a summary of incoming changes (including new MCP servers)
+3. You approve -> backup + import to local + push to remote
 
 ## Security
 
@@ -190,7 +190,9 @@ claude-brain is designed with security as a first-class concern:
 - **Pattern-based secret scanning** — warns if potential secrets are detected in memory
 - **MCP env vars stripped** — server configs sync without credentials
 - **Private repo enforced** — warns if public repo detected
-- **Automatic backups** — every import creates a backup in `~/.claude/brain-backups/`
+- **Automatic backups** — every import creates a backup in `~/.claude/brain-backups/` (includes memory, settings, ~/.claude.json)
+- **User approval required** — no changes are applied to your local config without your explicit approval
+- **New MCP servers highlighted** — sync summary calls out new MCP servers since they grant Claude access to new tools
 - **Machine trust model** — only add machines you fully control
 - **Optional encryption** — `age` encryption for snapshots at rest
 
@@ -201,11 +203,11 @@ See the full [Security Notice](#security-notice) below.
 | Operation | Cost | When |
 |-----------|------|------|
 | Structured merge | **Free** | Every sync |
-| Semantic merge | ~$0.01–0.05 | Only when content differs |
-| Auto-evolve | ~$0.02–0.10 | At most once per 7 days |
+| Semantic merge | ~$0.01-0.05 | Only when content differs |
+| Evolve analysis | ~$0.02-0.10 | When you run /brain-evolve |
 | Export / import | **Free** | Every sync |
 
-**Typical monthly cost: $0.50–2.00** for active multi-machine use. Budget cap: $0.50/call (configurable).
+**Typical monthly cost: $0.50-2.00** for active multi-machine use. Budget cap: $0.50/call (configurable).
 
 ## Platform Support
 
@@ -233,17 +235,20 @@ Share skills, agents, and rules with teammates:
 /brain-share rule security.md
 ```
 
-Shared artifacts live in `shared/` in the brain repo. Memory is **never** shared — personal only. Team members receive shared artifacts on their next sync.
+Shared artifacts live in `shared/` in the brain repo. Memory is **never** shared — personal only. Team members receive shared artifacts on their next `/brain-sync`.
 
-## Auto-Evolve
+## Evolve
 
-The brain runs evolution analysis every 7 days (configurable). It:
+Analyze accumulated memory and promote stable patterns to durable config:
 
-- Analyzes memory for stable, repeated patterns
-- High-confidence promotions (>0.9) are applied automatically
-- Lower-confidence suggestions are queued for manual review via `/brain-conflicts`
+```
+/brain-evolve
+```
 
-Trigger manually anytime with `/brain-evolve`.
+- Analyzes memory for stable, repeated patterns across projects
+- Presents each recommendation for your approval (Accept / Skip / Edit)
+- Creates a backup before applying any changes
+- Run `/brain-sync` afterward to push changes to other machines
 
 ## Encryption
 
@@ -280,7 +285,7 @@ Trigger manually anytime with `/brain-evolve`.
 1. **Use a PRIVATE Git repository.** Plugin warns if public repo detected.
 2. **Memory may contain sensitive context.** Review before initializing.
 3. **Git history is permanent.** Use `git-filter-repo` to purge if needed.
-4. **Auto-sync runs silently.** Backups created before each import.
+4. **All changes require your approval.** Nothing is applied without you reviewing and confirming.
 5. **Semantic merge uses Claude API.** Memory content is sent to `claude -p`.
 6. **Trust all machines in your network.** Imported skills execute with Claude's permissions.
 
