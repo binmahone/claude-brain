@@ -155,12 +155,20 @@ machine_id=$(get_config "machine_id")
 log_info "Taking snapshot of current brain state..."
 "${SCRIPT_DIR}/snapshot.sh" --quiet || log_warn "Snapshot failed — continuing with last committed state."
 
-# Step 2: pull --rebase
+# Step 2: pull --rebase (stash dirty working tree first)
+stashed=false
+if ! brain_git diff --quiet 2>/dev/null; then
+  brain_git stash --quiet 2>/dev/null && stashed=true
+fi
+
 brain_git pull --rebase origin main 2>/dev/null || {
   brain_git rebase --abort 2>/dev/null || true
+  [ "$stashed" = true ] && brain_git stash pop --quiet 2>/dev/null || true
   log_warn "Could not sync with remote. Working offline."
   exit 0
 }
+
+[ "$stashed" = true ] && brain_git stash pop --quiet 2>/dev/null || true
 
 # Record pre-merge hash
 local_consolidated_hash=""
