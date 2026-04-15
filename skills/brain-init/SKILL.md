@@ -8,6 +8,7 @@ The user wants to initialize their Claude Brain sync network.
 
 Parse arguments:
 - If arguments contain "--encrypt", enable encryption
+- If arguments contain "--force", allow overwriting a non-empty remote
 - The first non-flag argument is the Git remote URL
 
 Arguments provided: $ARGUMENTS
@@ -52,12 +53,14 @@ Arguments provided: $ARGUMENTS
 
 6. Run the initialization sequence:
    ```bash
-   # Parse arguments for encryption flag
+   # Parse arguments
    ENABLE_ENCRYPTION=false
+   FORCE=false
    REMOTE_URL=""
    for arg in $ARGUMENTS; do
      case "$arg" in
        --encrypt) ENABLE_ENCRYPTION=true ;;
+       --force) FORCE=true ;;
        *) if [ -z "$REMOTE_URL" ]; then REMOTE_URL="$arg"; fi ;;
      esac
    done
@@ -69,6 +72,18 @@ Arguments provided: $ARGUMENTS
    cd ~/.claude/brain-repo
    git init
    git remote add origin "$REMOTE_URL" 2>/dev/null || git remote set-url origin "$REMOTE_URL"
+
+   # Check if remote is non-empty
+   if git ls-remote --heads origin 2>/dev/null | grep -q .; then
+     if [ "$FORCE" != "true" ]; then
+       echo "ERROR: Remote repository is not empty — it may already contain brain data."
+       echo "  - To join an existing brain network: /brain-join $REMOTE_URL"
+       echo "  - To overwrite the remote: /brain-init $REMOTE_URL --force"
+       exit 1
+     else
+       echo "WARNING: Remote is not empty. --force will overwrite remote content."
+     fi
+   fi
 
    # Create directory structure
    mkdir -p machines consolidated meta
@@ -118,13 +133,17 @@ Arguments provided: $ARGUMENTS
    git add machines/ consolidated/ meta/
    git commit -m "Initialize brain: $(hostname)"
    git branch -M main
-   git push -u origin main
+   if [ "$FORCE" = "true" ]; then
+     git push --force -u origin main
+   else
+     git push -u origin main
+   fi
    ```
 
 7. Confirm success and show the user:
    - Their machine ID and name
    - The remote URL
    - Instructions: "Install claude-brain on your other machines and run: /brain-join $ARGUMENTS"
-   - Reminder: "Auto-sync is enabled. Brain syncs silently on every session start/end."
+   - Reminder: "Sync is manual — run /brain-sync to pull and apply changes from other machines."
 
 If any step fails, show the error and suggest fixes (e.g., create the remote repo first on GitHub).
