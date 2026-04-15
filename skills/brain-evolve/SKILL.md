@@ -56,9 +56,5 @@ The user wants to evolve their brain by promoting stable patterns from memory.
    - rule: write to ~/.claude/rules/<appropriate-name>.md
    - skill: create in ~/.claude/skills/<name>/SKILL.md
 
-8. After all changes are applied:
-   ```bash
-   bash "${CLAUDE_PLUGIN_ROOT}/scripts/snapshot.sh"
-   ```
-
-9. Show summary: "Brain evolved: X promotions accepted, Y skipped, Z stale entries archived, N conflicts resolved."
+8. Show summary: "Brain evolved: X promotions accepted, Y skipped, Z stale entries archived, N conflicts resolved."
+   Remind the user: "Run /brain-sync to push these changes to other machines."
