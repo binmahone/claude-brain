@@ -165,11 +165,15 @@ The Git remote URL is provided as: $ARGUMENTS
 
 12. **Ask the user for approval**: "Apply these changes to your local Claude Code config and push?"
 
-13. If the user approves, import and push:
+13. If the user approves, import, save baseline, and push:
     ```bash
     bash "${CLAUDE_PLUGIN_ROOT}/scripts/import.sh" "$CONSOLIDATED"
+
+    # Save baseline for 3-way merge on future syncs
+    cp "$CONSOLIDATED" "${HOME}/.claude/brain-repo/machines/${MACHINE_ID}/baseline.json"
+
     cd ~/.claude/brain-repo
-    git add consolidated/
+    git add consolidated/ "machines/${MACHINE_ID}/baseline.json"
     git commit -m "Join: $(hostname) consolidated brain"
     git push origin main
     ```

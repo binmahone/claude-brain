@@ -37,7 +37,7 @@ if [ "$MODE" = "apply" ]; then
 
   # Save baseline for 3-way merge on next sync
   machine_id=$(get_config "machine_id")
-  local baseline="${BRAIN_REPO}/machines/${machine_id}/baseline.json"
+  baseline="${BRAIN_REPO}/machines/${machine_id}/baseline.json"
   cp "$consolidated" "$baseline"
   brain_git add "machines/${machine_id}/baseline.json" 2>/dev/null || true
   brain_git diff --cached --quiet 2>/dev/null || \
