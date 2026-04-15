@@ -268,8 +268,8 @@ if ! $SKIP_SECRET_SCAN; then
   fi
 fi
 
-# Compute top-level hash for quick change detection
-snapshot_hash=$(echo "$snapshot" | compute_hash)
+# Compute content hash for change detection (exclude volatile fields)
+snapshot_hash=$(echo "$snapshot" | jq 'del(.exported_at, .snapshot_hash)' | compute_hash)
 
 snapshot=$(echo "$snapshot" | jq --arg h "sha256:${snapshot_hash}" '. + {snapshot_hash: $h}')
 

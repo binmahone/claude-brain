@@ -123,11 +123,14 @@ register_machine() {
         }' > "$BRAIN_CONFIG"
     fi
 
-  # Write per-machine file — each machine owns only its own file, no conflicts
+  # Write per-machine file — each machine owns only its own file, no conflicts.
+  # Only rewrite if content actually changed (machine name, OS, or projects list),
+  # to avoid unnecessary git diffs from timestamp-only updates.
   if [ -d "${BRAIN_REPO}" ]; then
     mkdir -p "${BRAIN_REPO}/meta/machines"
     local machine_file="${BRAIN_REPO}/meta/machines/${machine_id}.json"
-    jq -n \
+    local new_meta
+    new_meta=$(jq -n \
        --arg mid "$machine_id" \
        --arg mn "$machine_name" \
        --arg os "$os_type" \
@@ -140,7 +143,23 @@ register_machine() {
          registered_at: $ts,
          last_sync: $ts,
          projects: $projects
-       }' > "$machine_file"
+       }')
+
+    if [ -f "$machine_file" ]; then
+      # Compare meaningful fields only (ignore timestamps)
+      local old_sig new_sig
+      old_sig=$(jq -r '[.name, .os, (.projects | sort_by(.encoded) | tostring)] | join("|")' "$machine_file" 2>/dev/null || echo "")
+      new_sig=$(echo "$new_meta" | jq -r '[.name, .os, (.projects | sort_by(.encoded) | tostring)] | join("|")')
+      if [ "$old_sig" = "$new_sig" ]; then
+        # No meaningful change — keep existing file to avoid git diff
+        :
+      else
+        echo "$new_meta" > "$machine_file"
+      fi
+    else
+      # First registration — write the file
+      echo "$new_meta" > "$machine_file"
+    fi
   fi
 
   log_info "Machine registered: ${machine_name} (${machine_id})"

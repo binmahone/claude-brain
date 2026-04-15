@@ -32,14 +32,16 @@ $QUIET && export_args+=(--quiet)
 $SKIP_SECRET_SCAN && export_args+=(--skip-secret-scan)
 "${SCRIPT_DIR}/export.sh" "${export_args[@]}"
 
-# Check if anything actually changed (diff for tracked, status for untracked)
+# Check if content actually changed (compare snapshot_hash, which excludes timestamps)
 if ! $FORCE && ! $DRY_RUN; then
-  has_tracked_changes=false
-  has_untracked_files=false
-  brain_git diff --quiet -- "machines/${machine_id}/" 2>/dev/null || has_tracked_changes=true
-  [ -n "$(brain_git ls-files --others -- "machines/${machine_id}/" 2>/dev/null)" ] && has_untracked_files=true
-  if ! $has_tracked_changes && ! $has_untracked_files; then
-    log_info "No changes to commit."
+  new_hash=$(jq -r '.snapshot_hash // ""' "${snapshot_dir}/brain-snapshot.json" 2>/dev/null)
+  old_hash=""
+  # Get the hash from the last committed version (if any)
+  old_hash=$(brain_git show HEAD:"machines/${machine_id}/brain-snapshot.json" 2>/dev/null | jq -r '.snapshot_hash // ""' 2>/dev/null || true)
+  if [ -n "$new_hash" ] && [ "$new_hash" = "$old_hash" ]; then
+    # Content hash unchanged — only volatile fields (exported_at) differ. Skip commit.
+    brain_git checkout -- "machines/${machine_id}/brain-snapshot.json" 2>/dev/null || true
+    log_info "No content changes to commit."
     exit 0
   fi
 fi
