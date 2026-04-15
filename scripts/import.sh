@@ -292,9 +292,15 @@ import_brain() {
         tmp_remote_kb=$(brain_mktemp)
         printf '%s\n' "$new_keybindings" > "$tmp_remote_kb"
         # Union keybindings arrays (deduplicate by key+command)
-        jq -s '.[0] + .[1] | unique_by(.key, .command)' "${CLAUDE_DIR}/keybindings.json" "$tmp_remote_kb" > "$tmp"
-        mv "$tmp" "${CLAUDE_DIR}/keybindings.json"
-        log_info "Updated: keybindings.json (merged)"
+        # Guard: both sides must be arrays; skip merge if either is an object or invalid
+        if jq -s '.[0] + .[1] | unique_by(.key, .command)' \
+            "${CLAUDE_DIR}/keybindings.json" "$tmp_remote_kb" > "$tmp" 2>/dev/null && jq empty "$tmp" 2>/dev/null; then
+          mv "$tmp" "${CLAUDE_DIR}/keybindings.json"
+          log_info "Updated: keybindings.json (merged)"
+        else
+          log_warn "keybindings.json merge skipped — incompatible format (expected arrays)."
+          rm -f "$tmp"
+        fi
       else
         echo "$new_keybindings" > "${CLAUDE_DIR}/keybindings.json"
         log_info "Created: keybindings.json"

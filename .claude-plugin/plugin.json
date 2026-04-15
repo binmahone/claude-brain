@@ -1,7 +1,7 @@
 {
   "name": "claude-brain-sync",
   "description": "Sync Claude Code memory, skills, agents, rules, and settings across machines via Git. 3-way merge with baseline, user approval before every import/push, automatic backups, MCP server highlighting.",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "author": {
     "name": "binmahone",
     "url": "https://github.com/binmahone"
