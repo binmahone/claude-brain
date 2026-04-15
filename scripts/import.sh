@@ -148,7 +148,11 @@ import_brain() {
 
   # Create backup before importing (unless disabled)
   if ! $NO_BACKUP; then
-    backup_before_import || true
+    if ! backup_before_import; then
+      log_error "Backup failed. Refusing to import without a backup."
+      log_error "Fix the issue or use --no-backup to skip (at your own risk)."
+      exit 1
+    fi
   fi
 
   # Validate imports (log new/changed items)
@@ -226,13 +230,17 @@ import_brain() {
       printf '%s\n' "$new_settings" > "$tmp_remote"
       # Merge: keep local env, merge everything else from consolidated
       # Note: mcpServers are NOT in settings.json — they live in ~/.claude.json (CLAUDE_JSON)
-      jq -s '.[0] as $local | .[1] as $remote |
+      if jq -s '.[0] as $local | .[1] as $remote |
         ($local.env // {}) as $local_env |
         ($remote // {}) * $local | .env = $local_env' \
-        "${CLAUDE_DIR}/settings.json" "$tmp_remote" > "$tmp"
-      mv "$tmp" "${CLAUDE_DIR}/settings.json"
-      chmod 600 "${CLAUDE_DIR}/settings.json"
-      log_info "Updated: settings.json (merged, local env preserved)"
+        "${CLAUDE_DIR}/settings.json" "$tmp_remote" > "$tmp" && jq empty "$tmp" 2>/dev/null; then
+        mv "$tmp" "${CLAUDE_DIR}/settings.json"
+        chmod 600 "${CLAUDE_DIR}/settings.json"
+        log_info "Updated: settings.json (merged, local env preserved)"
+      else
+        log_warn "settings.json merge produced invalid JSON — skipped, local file preserved."
+        rm -f "$tmp"
+      fi
     elif [ "$new_settings" != "null" ] && [ ! -f "${CLAUDE_DIR}/settings.json" ]; then
       echo "$new_settings" > "${CLAUDE_DIR}/settings.json"
       chmod 600 "${CLAUDE_DIR}/settings.json"
@@ -255,13 +263,17 @@ import_brain() {
         local tmp_mcp
         tmp_mcp=$(brain_mktemp)
         printf '%s\n' "$new_mcp_servers" > "$tmp_mcp"
-        jq -s '.[0] as $local | .[1] as $remote_mcp |
+        if jq -s '.[0] as $local | .[1] as $remote_mcp |
           ($local.mcpServers // {}) as $local_mcp |
           $local | .mcpServers = ($remote_mcp * $local_mcp)' \
-          "${CLAUDE_JSON}" "$tmp_mcp" > "$tmp"
-        mv "$tmp" "${CLAUDE_JSON}"
-        chmod 600 "${CLAUDE_JSON}"
-        log_info "Updated: ~/.claude.json (MCP servers merged, local overrides preserved)"
+          "${CLAUDE_JSON}" "$tmp_mcp" > "$tmp" && jq empty "$tmp" 2>/dev/null; then
+          mv "$tmp" "${CLAUDE_JSON}"
+          chmod 600 "${CLAUDE_JSON}"
+          log_info "Updated: ~/.claude.json (MCP servers merged, local overrides preserved)"
+        else
+          log_warn "~/.claude.json merge produced invalid JSON — skipped, local file preserved."
+          rm -f "$tmp"
+        fi
       else
         # Create ~/.claude.json with just mcpServers
         jq -n --argjson mcp "$new_mcp_servers" '{"mcpServers": $mcp}' > "${CLAUDE_JSON}"
