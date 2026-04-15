@@ -1,18 +1,26 @@
 #!/usr/bin/env bash
-# merge.sh — Brain merge: union for non-conflicting items, defer conflicts.
+# merge.sh — Brain merge with 3-way support (falls back to 2-way).
 #
-# Rules:
+# 3-way merge (when ANCESTOR is available):
+#   Only ancestor→consolidated changed  → incoming: take consolidated
+#   Only ancestor→snapshot changed       → outgoing: take snapshot
+#   Both changed, same result            → no conflict
+#   Both changed, different result       → real conflict (keep consolidated, record)
+#   File new on one side only            → include it
+#
+# 2-way merge (fallback, no ancestor):
 #   Only one side has a file  → include it (no conflict)
-#   Both sides, same content  → keep as-is (no conflict)
-#   Both sides, different     → keep consolidated version, record conflict
+#   Both sides, same content  → keep as-is
+#   Both sides, different     → keep consolidated, record conflict
 #
 # Conflicts are written to $CONFLICTS_FILE (brain-conflicts.json) for later
-# resolution by resolve-conflicts.sh or the /brain-conflicts skill.
+# resolution by the /brain-conflicts skill.
 #
-# Usage: merge.sh BASE OTHER OUTPUT
-#   BASE   — consolidated brain (other machines' merged state)
-#   OTHER  — current machine's fresh snapshot
-#   OUTPUT — destination path for merged result
+# Usage: merge.sh BASE OTHER OUTPUT [ANCESTOR]
+#   BASE     — consolidated brain (other machines' merged state)
+#   OTHER    — current machine's fresh snapshot
+#   OUTPUT   — destination path for merged result
+#   ANCESTOR — (optional) baseline from last successful sync; enables 3-way merge
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/common.sh"
@@ -20,19 +28,24 @@ source "${SCRIPT_DIR}/common.sh"
 BASE="$1"
 OTHER="$2"
 OUTPUT="$3"
+ANCESTOR="${4:-}"
 
 if [ ! -f "$BASE" ] || [ ! -f "$OTHER" ]; then
   log_error "merge.sh: input files not found."
   exit 1
 fi
 
+THREE_WAY=false
+if [ -n "$ANCESTOR" ] && [ -f "$ANCESTOR" ]; then
+  THREE_WAY=true
+  log_info "3-way merge enabled (baseline available)."
+else
+  log_info "2-way merge (no baseline — first sync or migration)."
+fi
+
 # ── Conflict tracking ─────────────────────────────────────────────────────────
 CONFLICTS_FILE="${CONFLICTS_FILE:-${HOME}/.claude/brain-conflicts.json}"
-_conflict_count=0
 
-# Record a conflict for later resolution.
-# Writes directly to CONFLICTS_FILE (survives subshell exits, unlike arrays
-# or brain_mktemp files which get cleaned up by the EXIT trap in subshells).
 record_conflict() {
   local section="$1" filename="$2" base_content="$3" other_content="$4"
   local machine_id machine_name timestamp
@@ -40,7 +53,6 @@ record_conflict() {
   machine_name=$(jq -r '.machine.name // "unknown"' "$OTHER")
   timestamp=$(now_iso)
 
-  # Initialize file if needed
   if [ ! -f "$CONFLICTS_FILE" ]; then
     echo '{"conflicts":[]}' > "$CONFLICTS_FILE"
   fi
@@ -62,7 +74,6 @@ record_conflict() {
       resolved: false
     }')
 
-  # Append directly — use a lock-free approach (single-writer assumption)
   local tmp_cf
   tmp_cf=$(mktemp "${CONFLICTS_FILE}.XXXXXX")
   jq --argjson e "$entry" '.conflicts = [$e] + .conflicts' \
@@ -71,7 +82,6 @@ record_conflict() {
   log_info "Conflict detected: ${section}/${filename} — deferred for resolution."
 }
 
-# Report conflict count at end of merge.
 report_conflicts() {
   if [ -f "$CONFLICTS_FILE" ]; then
     local count
@@ -89,44 +99,112 @@ if [ "$(file_hash "$BASE")" = "$(file_hash "$OTHER")" ]; then
   exit 0
 fi
 
-# ── Merge a set of files ───────────────────────────────────────────────────────
-# Usage: merge_fileset BASE_JSON OTHER_JSON LABEL
-# BASE_JSON / OTHER_JSON are objects: { "filename": { "content": "...", "hash": "..." } }
-# Prints merged JSON object to stdout.
-# Non-conflicting files are unioned. Conflicts keep the consolidated (BASE)
-# version and are recorded for later resolution.
+# ── Merge a set of files (3-way or 2-way) ────────────────────────────────────
+# Args: BASE_JSON OTHER_JSON LABEL [ANCESTOR_JSON]
+# Each JSON is: { "filename": { "content": "...", "hash": "..." } }
 merge_fileset() {
-  local base_json="$1" other_json="$2" label="$3"
+  local base_json="$1" other_json="$2" label="$3" ancestor_json="${4:-\{\}}"
 
-  # Build union: all files from both sides. Base wins on conflict for now.
-  local merged
-  merged=$(jq -n --argjson b "$base_json" --argjson o "$other_json" '
-    ($b | keys) + ($o | keys) | unique | map(. as $k |
-      if ($b | has($k)) then {($k): $b[$k]}
-      else {($k): $o[$k]}
-      end
-    ) | add // {}
-  ')
+  if $THREE_WAY && [ "$ancestor_json" != "{}" ]; then
+    # ── 3-way merge ──────────────────────────────────────────────────────
+    # For each file across all three versions, decide based on who changed it.
+    local merged
+    merged=$(jq -n \
+      --argjson a "$ancestor_json" --argjson b "$base_json" --argjson o "$other_json" '
+      (($a | keys) + ($b | keys) + ($o | keys) | unique) | map(. as $k |
+        ($a[$k].hash // null) as $ah |
+        ($b[$k].hash // null) as $bh |
+        ($o[$k].hash // null) as $oh |
 
-  # Detect conflicts: files that exist on both sides with different content
-  local conflict_keys
-  conflict_keys=$(jq -rn --argjson b "$base_json" --argjson o "$other_json" '
-    [ ($b | keys)[] | select(. as $k |
-        ($o | has($k)) and ($b[$k].content != $o[$k].content)
-      )
-    ] | .[]
-  ')
+        if ($bh == $oh) then
+          # Same on both sides — no conflict, take either (prefer consolidated)
+          if ($b | has($k)) then {($k): $b[$k]}
+          elif ($o | has($k)) then {($k): $o[$k]}
+          else empty end
+        elif ($ah == $bh) then
+          # Only snapshot changed — outgoing, take snapshot
+          if ($o | has($k)) then {($k): $o[$k]}
+          else empty end
+        elif ($ah == $oh) then
+          # Only consolidated changed — incoming, take consolidated
+          if ($b | has($k)) then {($k): $b[$k]}
+          else empty end
+        elif ($ah == null) then
+          # File did not exist in ancestor — both added independently
+          # Keep consolidated, record conflict below
+          if ($b | has($k)) then {($k): $b[$k]}
+          elif ($o | has($k)) then {($k): $o[$k]}
+          else empty end
+        else
+          # Both changed differently — real conflict, keep consolidated
+          if ($b | has($k)) then {($k): $b[$k]}
+          elif ($o | has($k)) then {($k): $o[$k]}
+          else empty end
+        end
+      ) | add // {}
+    ')
 
-  while IFS= read -r key; do
-    [ -z "$key" ] && continue
-    local bc oc
-    bc=$(jq -rn --argjson b "$base_json" --arg k "$key" '$b[$k].content // ""')
-    oc=$(jq -rn --argjson o "$other_json" --arg k "$key" '$o[$k].content // ""')
-    record_conflict "$label" "$key" "$bc" "$oc"
-    # Consolidated (BASE) version stays in merged — will be updated when conflict is resolved
-  done <<< "$conflict_keys"
+    # Detect real conflicts: both sides changed from ancestor, differently
+    local conflict_keys
+    conflict_keys=$(jq -rn \
+      --argjson a "$ancestor_json" --argjson b "$base_json" --argjson o "$other_json" '
+      [($a | keys) + ($b | keys) + ($o | keys) | unique | .[] | select(. as $k |
+        (($a[$k].hash // null) as $ah |
+         ($b[$k].hash // null) as $bh |
+         ($o[$k].hash // null) as $oh |
+         # Both changed from ancestor, and differently from each other
+         ($ah != $bh) and ($ah != $oh) and ($bh != $oh) and ($bh != null) and ($oh != null))
+      )] | .[]
+    ')
 
-  echo "$merged"
+    while IFS= read -r key; do
+      [ -z "$key" ] && continue
+      local bc oc
+      bc=$(jq -rn --argjson b "$base_json" --arg k "$key" '$b[$k].content // ""')
+      oc=$(jq -rn --argjson o "$other_json" --arg k "$key" '$o[$k].content // ""')
+      record_conflict "$label" "$key" "$bc" "$oc"
+    done <<< "$conflict_keys"
+
+    echo "$merged"
+  else
+    # ── 2-way merge (fallback) ───────────────────────────────────────────
+    local merged
+    merged=$(jq -n --argjson b "$base_json" --argjson o "$other_json" '
+      ($b | keys) + ($o | keys) | unique | map(. as $k |
+        if ($b | has($k)) then {($k): $b[$k]}
+        else {($k): $o[$k]}
+        end
+      ) | add // {}
+    ')
+
+    local conflict_keys
+    conflict_keys=$(jq -rn --argjson b "$base_json" --argjson o "$other_json" '
+      [ ($b | keys)[] | select(. as $k |
+          ($o | has($k)) and ($b[$k].content != $o[$k].content)
+        )
+      ] | .[]
+    ')
+
+    while IFS= read -r key; do
+      [ -z "$key" ] && continue
+      local bc oc
+      bc=$(jq -rn --argjson b "$base_json" --arg k "$key" '$b[$k].content // ""')
+      oc=$(jq -rn --argjson o "$other_json" --arg k "$key" '$o[$k].content // ""')
+      record_conflict "$label" "$key" "$bc" "$oc"
+    done <<< "$conflict_keys"
+
+    echo "$merged"
+  fi
+}
+
+# ── Helper: get section from a brain JSON file ────────────────────────────────
+get_section() {
+  local file="$1" jq_path="$2"
+  if [ -f "$file" ]; then
+    jq --arg p "$jq_path" 'getpath($p | split(".")) // {}' "$file"
+  else
+    echo '{}'
+  fi
 }
 
 # ── Start with BASE as foundation ─────────────────────────────────────────────
@@ -135,14 +213,31 @@ cp "$BASE" "$OUTPUT"
 # ── 1. CLAUDE.md ──────────────────────────────────────────────────────────────
 bc=$(jq -r '.declarative.claude_md.content // ""' "$BASE")
 oc=$(jq -r '.declarative.claude_md.content // ""' "$OTHER")
+ac=""
+if $THREE_WAY; then
+  ac=$(jq -r '.declarative.claude_md.content // ""' "$ANCESTOR")
+fi
+
 if [ -n "$oc" ] && [ "$bc" != "$oc" ]; then
-  if [ -z "$bc" ]; then
-    # Only snapshot has it — use snapshot's version (no conflict)
-    mc="$oc"
+  if $THREE_WAY; then
+    if [ "$ac" = "$bc" ]; then
+      # Only local changed — take local (outgoing)
+      mc="$oc"
+    elif [ "$ac" = "$oc" ]; then
+      # Only consolidated changed — take consolidated (incoming)
+      mc="$bc"
+    else
+      # Both changed — real conflict
+      record_conflict "claude_md" "CLAUDE.md" "$bc" "$oc"
+      mc="$bc"
+    fi
   else
-    # Both have it with different content — conflict
-    record_conflict "claude_md" "CLAUDE.md" "$bc" "$oc"
-    mc="$bc"  # keep consolidated for now
+    if [ -z "$bc" ]; then
+      mc="$oc"
+    else
+      record_conflict "claude_md" "CLAUDE.md" "$bc" "$oc"
+      mc="$bc"
+    fi
   fi
   tmp=$(brain_mktemp)
   jq --arg c "$mc" \
@@ -159,9 +254,13 @@ for section_path in \
   jq_path="${section_path%%:*}"
   label="${section_path##*:}"
 
-  bs=$(jq --arg p "$jq_path" 'getpath($p | split(".")) // {}' "$BASE")
-  os=$(jq --arg p "$jq_path" 'getpath($p | split(".")) // {}' "$OTHER")
-  ms=$(merge_fileset "$bs" "$os" "$label")
+  bs=$(get_section "$BASE" "$jq_path")
+  os=$(get_section "$OTHER" "$jq_path")
+  as="{}"
+  if $THREE_WAY; then
+    as=$(get_section "$ANCESTOR" "$jq_path")
+  fi
+  ms=$(merge_fileset "$bs" "$os" "$label" "$as")
 
   tmp=$(brain_mktemp)
   jq --arg p "$jq_path" --argjson v "$ms" 'setpath($p | split("."); $v)' \
@@ -171,15 +270,21 @@ done
 # ── 6. Auto memory (per project — context isolation) ──────────────────────────
 base_mem=$(jq '.experiential.auto_memory // {}' "$BASE")
 other_mem=$(jq '.experiential.auto_memory // {}' "$OTHER")
-all_proj=$(jq -rn --argjson b "$base_mem" --argjson o "$other_mem" \
-  '($b | keys) + ($o | keys) | unique | .[]')
+ancestor_mem="{}"
+if $THREE_WAY; then
+  ancestor_mem=$(jq '.experiential.auto_memory // {}' "$ANCESTOR")
+fi
+
+all_proj=$(jq -rn --argjson b "$base_mem" --argjson o "$other_mem" --argjson a "$ancestor_mem" \
+  '($b | keys) + ($o | keys) + ($a | keys) | unique | .[]')
 
 merged_mem="{}"
 while IFS= read -r proj; do
   [ -z "$proj" ] && continue
-  bp=$(jq -n --argjson m "$base_mem"  --arg k "$proj" '$m[$k] // {}')
-  op=$(jq -n --argjson m "$other_mem" --arg k "$proj" '$m[$k] // {}')
-  mp=$(merge_fileset "$bp" "$op" "memory/${proj}")
+  bp=$(jq -n --argjson m "$base_mem"     --arg k "$proj" '$m[$k] // {}')
+  op=$(jq -n --argjson m "$other_mem"    --arg k "$proj" '$m[$k] // {}')
+  ap=$(jq -n --argjson m "$ancestor_mem" --arg k "$proj" '$m[$k] // {}')
+  mp=$(merge_fileset "$bp" "$op" "memory/${proj}" "$ap")
   merged_mem=$(jq -n --argjson acc "$merged_mem" --arg k "$proj" --argjson v "$mp" \
     '$acc + {($k): $v}')
 done <<< "$all_proj"
@@ -191,15 +296,21 @@ jq --argjson v "$merged_mem" '.experiential.auto_memory = $v' \
 # ── 7. Agent memory (per agent — context isolation) ───────────────────────────
 base_amem=$(jq '.experiential.agent_memory // {}' "$BASE")
 other_amem=$(jq '.experiential.agent_memory // {}' "$OTHER")
-all_agents=$(jq -rn --argjson b "$base_amem" --argjson o "$other_amem" \
-  '($b | keys) + ($o | keys) | unique | .[]')
+ancestor_amem="{}"
+if $THREE_WAY; then
+  ancestor_amem=$(jq '.experiential.agent_memory // {}' "$ANCESTOR")
+fi
+
+all_agents=$(jq -rn --argjson b "$base_amem" --argjson o "$other_amem" --argjson a "$ancestor_amem" \
+  '($b | keys) + ($o | keys) + ($a | keys) | unique | .[]')
 
 merged_amem="{}"
 while IFS= read -r agent; do
   [ -z "$agent" ] && continue
-  ba=$(jq -n --argjson m "$base_amem"  --arg k "$agent" '$m[$k] // {}')
-  oa=$(jq -n --argjson m "$other_amem" --arg k "$agent" '$m[$k] // {}')
-  ma=$(merge_fileset "$ba" "$oa" "agent-memory/${agent}")
+  ba=$(jq -n --argjson m "$base_amem"     --arg k "$agent" '$m[$k] // {}')
+  oa=$(jq -n --argjson m "$other_amem"    --arg k "$agent" '$m[$k] // {}')
+  aa=$(jq -n --argjson m "$ancestor_amem" --arg k "$agent" '$m[$k] // {}')
+  ma=$(merge_fileset "$ba" "$oa" "agent-memory/${agent}" "$aa")
   merged_amem=$(jq -n --argjson acc "$merged_amem" --arg k "$agent" --argjson v "$ma" \
     '$acc + {($k): $v}')
 done <<< "$all_agents"
@@ -245,12 +356,6 @@ jq -s '
 ' "$OUTPUT" "$OTHER" > "$tmp" && mv "$tmp" "$OUTPUT"
 
 # ── 10. Group bidirectional sync ──────────────────────────────────────────────
-# Run after all same-key merges. For each group:
-#   - File only one member has → copy to all others (no conflict)
-#   - File multiple members have with same content → copy to missing members
-#   - File multiple members have with different content → record conflict, keep first version
-
-# Union groups from merged output + local config
 final_groups=$(jq '.declarative.project_groups // {}' "$OUTPUT")
 if [ -f "${HOME}/.claude/brain-groups.json" ]; then
   local_g=$(jq '.' "${HOME}/.claude/brain-groups.json" 2>/dev/null || echo "{}")
@@ -267,7 +372,6 @@ if [ "$(echo "$final_groups" | jq 'length')" -gt 0 ]; then
   while IFS= read -r gname; do
     [ -z "$gname" ] && continue
 
-    # Members present in merged memory
     mapfile -t members < <(echo "$final_groups" | jq -r --arg g "$gname" '.[$g][]' 2>/dev/null)
     existing=()
     for m in "${members[@]:-}"; do
@@ -276,7 +380,6 @@ if [ "$(echo "$final_groups" | jq 'length')" -gt 0 ]; then
     done
     [ "${#existing[@]}" -lt 2 ] && continue
 
-    # All filenames across all existing members
     all_fnames=$(
       for m in "${existing[@]}"; do
         echo "$cur_mem" | jq -r --arg m "$m" '.[$m] | keys[]' 2>/dev/null
@@ -286,7 +389,6 @@ if [ "$(echo "$final_groups" | jq 'length')" -gt 0 ]; then
     while IFS= read -r fname; do
       [ -z "$fname" ] && continue
 
-      # Collect (member, content) pairs for this filename
       has_m=(); contents=()
       for m in "${existing[@]}"; do
         if echo "$cur_mem" | jq -e --arg m "$m" --arg f "$fname" \
@@ -297,17 +399,13 @@ if [ "$(echo "$final_groups" | jq 'length')" -gt 0 ]; then
         fi
       done
 
-      if [ "${#has_m[@]}" -eq 0 ]; then
-        continue
-      fi
+      [ "${#has_m[@]}" -eq 0 ] && continue
 
-      # Check if all present versions are identical
       ref="${contents[0]}"
       all_same=true
       for c in "${contents[@]}"; do [ "$c" != "$ref" ] && all_same=false && break; done
 
       if $all_same; then
-        # All same (or only one has it): copy ref to members that don't have it
         for m in "${existing[@]}"; do
           echo "$cur_mem" | jq -e --arg m "$m" --arg f "$fname" \
             '.[$m] | has($f)' > /dev/null 2>&1 && continue
@@ -316,7 +414,6 @@ if [ "$(echo "$final_groups" | jq 'length')" -gt 0 ]; then
             '.[$m][$f] = {content: $c, hash: "group-synced"}')
         done
       else
-        # Conflict within group — record it, keep first version for all
         record_conflict "group/${gname}" "$fname" "${contents[0]}" "${contents[1]}"
         mc="${contents[0]}"
         for m in "${existing[@]}"; do

@@ -35,6 +35,15 @@ if [ "$MODE" = "apply" ]; then
   "${SCRIPT_DIR}/import.sh" "$consolidated"
   log_info "Brain changes applied to local."
 
+  # Save baseline for 3-way merge on next sync
+  machine_id=$(get_config "machine_id")
+  local baseline="${BRAIN_REPO}/machines/${machine_id}/baseline.json"
+  cp "$consolidated" "$baseline"
+  brain_git add "machines/${machine_id}/baseline.json" 2>/dev/null || true
+  brain_git diff --cached --quiet 2>/dev/null || \
+    brain_git commit -m "Baseline: $(get_machine_name) at $(now_iso)" 2>/dev/null || true
+  log_info "Baseline saved for 3-way merge."
+
   # Push to remote
   if brain_push_with_retry 3 2; then
     local_tmp=$(brain_mktemp)
@@ -74,10 +83,17 @@ if [ "$MODE" = "summary" ]; then
     conflict_count=$(jq '[.conflicts[] | select(.resolved != true)] | length' "${HOME}/.claude/brain-conflicts.json" 2>/dev/null || echo "0")
   fi
 
+  # Check for unpushed commits (outgoing changes)
+  has_outgoing=false
+  if brain_git log origin/main..HEAD --oneline 2>/dev/null | grep -q .; then
+    has_outgoing=true
+  fi
+
   # Generate summary by comparing snapshot (what we have locally) vs consolidated (merged result)
   jq -n --argjson local "$old_snapshot_json" \
         --argjson merged "$(cat "$consolidated")" \
-        --argjson conflict_count "$conflict_count" '
+        --argjson conflict_count "$conflict_count" \
+        --argjson has_outgoing "$has_outgoing" '
     def diff_keys($a; $b):
       (($b // {}) | keys) - (($a // {}) | keys);
     def changed_keys($a; $b):
@@ -112,9 +128,10 @@ if [ "$MODE" = "summary" ]; then
       agents_added: diff_keys($la; $ma),
       agents_changed: changed_keys($la; $ma),
       mcp_servers_added: $mcp_added,
+      has_outgoing: $has_outgoing,
       conflicts: $conflict_count
     }
-  ' 2>/dev/null || echo '{"has_changes":false,"conflicts":0}'
+  ' 2>/dev/null || echo '{"has_changes":false,"has_outgoing":false,"conflicts":0}'
 
   if [ "$conflict_count" -gt 0 ]; then
     log_info "${conflict_count} conflict(s) pending. Run /brain-conflicts to resolve."
@@ -145,8 +162,9 @@ if [ -f "${BRAIN_REPO}/consolidated/brain.json" ]; then
   local_consolidated_hash=$(file_hash "${BRAIN_REPO}/consolidated/brain.json")
 fi
 
-# Step 3: 2-way merge
+# Step 3: merge (3-way if baseline exists, otherwise 2-way)
 current_snapshot="${BRAIN_REPO}/machines/${machine_id}/brain-snapshot.json"
+baseline="${BRAIN_REPO}/machines/${machine_id}/baseline.json"
 current_snapshot_work=""
 
 if [ ! -f "$current_snapshot" ]; then
@@ -178,10 +196,12 @@ if [ -n "$current_snapshot_work" ]; then
   else
     log_info "Merging with consolidated brain..."
     merge_out=$(brain_mktemp)
-    "${SCRIPT_DIR}/merge.sh" \
-      "${BRAIN_REPO}/consolidated/brain.json" \
-      "$current_snapshot_work" \
-      "$merge_out"
+    merge_args=("${BRAIN_REPO}/consolidated/brain.json" "$current_snapshot_work" "$merge_out")
+    # Pass baseline as 4th arg for 3-way merge if available
+    if [ -f "$baseline" ]; then
+      merge_args+=("$baseline")
+    fi
+    "${SCRIPT_DIR}/merge.sh" "${merge_args[@]}"
     mv "$merge_out" "${BRAIN_REPO}/consolidated/brain.json"
   fi
 
