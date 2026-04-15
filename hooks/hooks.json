@@ -1,18 +1,3 @@
 {
-  "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "startup|resume",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "if [ -f \"${HOME}/.claude/brain-config.json\" ]; then bash \"${CLAUDE_PLUGIN_ROOT}/scripts/sync.sh\" --quiet --auto-merge; fi",
-            "timeout": 30,
-            "async": true,
-            "statusMessage": "Syncing brain..."
-          }
-        ]
-      }
-    ]
-  }
+  "hooks": {}
 }

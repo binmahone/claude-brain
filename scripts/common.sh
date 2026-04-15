@@ -532,6 +532,23 @@ backup_before_import() {
   [ -f "${CLAUDE_DIR}/settings.json" ] && cp "${CLAUDE_DIR}/settings.json" "${backup_path}/" 2>/dev/null || true
   [ -f "${CLAUDE_DIR}/keybindings.json" ] && cp "${CLAUDE_DIR}/keybindings.json" "${backup_path}/" 2>/dev/null || true
 
+  # Back up memory (auto_memory per project)
+  if [ -d "${CLAUDE_DIR}/projects" ]; then
+    for proj_dir in "${CLAUDE_DIR}"/projects/*/memory; do
+      [ -d "$proj_dir" ] || continue
+      local proj_name
+      proj_name="$(basename "$(dirname "$proj_dir")")"
+      mkdir -p "${backup_path}/projects/${proj_name}/memory"
+      cp -r "$proj_dir"/* "${backup_path}/projects/${proj_name}/memory/" 2>/dev/null || true
+    done
+  fi
+
+  # Back up agent memory
+  [ -d "${CLAUDE_DIR}/agent-memory" ] && cp -r "${CLAUDE_DIR}/agent-memory" "${backup_path}/" 2>/dev/null || true
+
+  # Back up ~/.claude.json (MCP servers, etc.)
+  [ -f "${CLAUDE_JSON}" ] && cp "${CLAUDE_JSON}" "${backup_path}/claude.json" 2>/dev/null || true
+
   # Prune old backups (keep last 5)
   if [ -d "$BACKUP_DIR" ]; then
     local total_backups
@@ -561,6 +578,25 @@ restore_from_backup() {
   [ -d "${backup_path}/agents" ] && cp -r "${backup_path}/agents" "${CLAUDE_DIR}/" 2>/dev/null || true
   [ -f "${backup_path}/settings.json" ] && cp "${backup_path}/settings.json" "${CLAUDE_DIR}/" 2>/dev/null || true
   [ -f "${backup_path}/keybindings.json" ] && cp "${backup_path}/keybindings.json" "${CLAUDE_DIR}/" 2>/dev/null || true
+
+  # Restore memory (auto_memory per project)
+  if [ -d "${backup_path}/projects" ]; then
+    for proj_mem in "${backup_path}"/projects/*/memory; do
+      [ -d "$proj_mem" ] || continue
+      local proj_name
+      proj_name="$(basename "$(dirname "$proj_mem")")"
+      local target="${CLAUDE_DIR}/projects/${proj_name}/memory"
+      mkdir -p "$target"
+      cp -r "$proj_mem"/* "$target/" 2>/dev/null || true
+    done
+  fi
+
+  # Restore agent memory
+  [ -d "${backup_path}/agent-memory" ] && cp -r "${backup_path}/agent-memory" "${CLAUDE_DIR}/" 2>/dev/null || true
+
+  # Restore ~/.claude.json
+  [ -f "${backup_path}/claude.json" ] && cp "${backup_path}/claude.json" "${CLAUDE_JSON}" 2>/dev/null || true
+
   log_info "Restore complete."
 }
 

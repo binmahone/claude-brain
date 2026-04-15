@@ -15,31 +15,40 @@ The user wants to evolve their brain by promoting stable patterns from memory.
 
 2. Read the analysis results from `~/.claude/brain-repo/meta/last-evolve.json`.
 
-3. For each recommendation in `promotions`, present it to the user:
+3. Present the summary to the user. For each recommendation in `promotions`, present it:
 
    **For claude_md promotions:**
    - Show the proposed addition
-   - Show the reason
+   - Show the reason and confidence
    - Ask: Accept / Skip / Edit first
-   - If accepted, append to ~/.claude/CLAUDE.md
 
    **For rule promotions:**
    - Show the proposed rule content
    - Ask: Accept / Skip / Edit first
-   - If accepted, write to ~/.claude/rules/<appropriate-name>.md
 
    **For skill suggestions:**
    - Show the proposed skill
    - Ask: Accept / Skip / Edit first
-   - If accepted, create in ~/.claude/skills/<name>/SKILL.md
 
 4. For each entry in `stale_entries`, ask:
    - Archive (remove from memory) / Keep
    - If archived, note in the memory file that it was archived
 
-5. After all changes are applied:
+5. **Before applying any accepted changes**, create a backup:
+   ```bash
+   source "${CLAUDE_PLUGIN_ROOT}/scripts/common.sh"
+   backup_before_import
+   ```
+   Tell the user: "Backup saved to ~/.claude/brain-backups/."
+
+6. Apply only the changes the user accepted:
+   - claude_md: append to ~/.claude/CLAUDE.md
+   - rule: write to ~/.claude/rules/<appropriate-name>.md
+   - skill: create in ~/.claude/skills/<name>/SKILL.md
+
+7. After all changes are applied:
    ```bash
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/snapshot.sh"
    ```
 
-6. Show summary: "Brain evolved: X promotions accepted, Y stale entries archived."
+8. Show summary: "Brain evolved: X promotions accepted, Y skipped, Z stale entries archived."

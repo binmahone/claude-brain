@@ -11,6 +11,5 @@
   "stale_threshold_days": 14,
   "encryption": {
     "enabled": false
-  },
-  "evolve_interval_days": 7
+  }
 }

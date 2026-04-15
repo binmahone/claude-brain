@@ -27,8 +27,7 @@ The Git remote URL is provided as: $ARGUMENTS
 4. **Show security notice:**
    - "Joining a brain network means:"
    - "  - Your local brain data will be PUSHED to the remote repository"
-   - "  - Remote brain data (skills, agents, rules) will be IMPORTED to your machine"
-   - "  - Auto-sync will run on every Claude Code session start/end"
+   - "  - Remote brain data (skills, agents, rules) can be IMPORTED to your machine (with your approval)"
    - ""
    - "Only join brain networks you trust — imported skills and agents execute with Claude's permissions."
 
@@ -129,7 +128,7 @@ The Git remote URL is provided as: $ARGUMENTS
    }
    ```
 
-9. Merge this machine's snapshot into the consolidated brain (2-way), then import:
+9. Merge this machine's snapshot into the consolidated brain (2-way):
    ```bash
    CURRENT_SNAPSHOT="${HOME}/.claude/brain-repo/machines/${MACHINE_ID}/brain-snapshot.json"
    CONSOLIDATED="${HOME}/.claude/brain-repo/consolidated/brain.json"
@@ -140,17 +139,32 @@ The Git remote URL is provided as: $ARGUMENTS
      # No consolidated yet — this machine's snapshot becomes the seed
      cp "$CURRENT_SNAPSHOT" "$CONSOLIDATED"
    else
-     # 2-way merge: LLM merges all conflicts, per-project context isolation, group sync included
+     # 2-way merge: per-project context isolation, group sync included
      MERGE_TMP=$(mktemp)
      bash "${CLAUDE_PLUGIN_ROOT}/scripts/merge.sh" \
        "$CONSOLIDATED" "$CURRENT_SNAPSHOT" "$MERGE_TMP"
      mv "$MERGE_TMP" "$CONSOLIDATED"
    fi
-
-   bash "${CLAUDE_PLUGIN_ROOT}/scripts/import.sh" "$CONSOLIDATED"
    ```
 
-10. Commit consolidated and push everything once:
+10. **Show the user what will be imported before applying.**
+    Get the change summary:
+    ```bash
+    bash "${CLAUDE_PLUGIN_ROOT}/scripts/sync.sh" --summary
+    ```
+    Present the summary: new/changed rules, skills, agents, memory, settings, conflicts.
+    **Ask the user for approval**: "Apply these changes to your local Claude Code config?"
+
+11. If the user approves, import:
+    ```bash
+    bash "${CLAUDE_PLUGIN_ROOT}/scripts/import.sh" "$CONSOLIDATED"
+    ```
+    Tell the user: "A backup of your pre-join state was saved to ~/.claude/brain-backups/."
+
+12. If the user declines, skip import. Tell the user:
+    "Skipped import. Your machine is registered and snapshot pushed, but no remote changes were applied locally. Run /brain-sync to review and apply later."
+
+13. Commit consolidated and push:
     ```bash
     cd ~/.claude/brain-repo
     git add consolidated/
@@ -158,8 +172,8 @@ The Git remote URL is provided as: $ARGUMENTS
     git push origin main
     ```
 
-11. Confirm success:
+14. Confirm success:
     - Show how many machines are now in the network
-    - Show what was imported/merged
-    - Note: "Auto-sync is now enabled. Your brain syncs on every Claude Code session start/end."
-    - Reminder: "A backup of your pre-join brain state was saved to ~/.claude/brain-backups/"
+    - Show what was imported/merged (or note that import was skipped)
+    - Note: "Sync is manual — run /brain-sync to pull and apply changes from other machines."
+    - If there are conflicts: suggest /brain-conflicts

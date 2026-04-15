@@ -1,51 +1,153 @@
 #!/usr/bin/env bash
-# sync.sh — Pull latest from remote, merge locally, then push consolidated result
+# sync.sh — Pull latest from remote, merge locally, commit.
+#
+# Modes:
+#   (default)   snapshot → pull → merge → commit locally (no import, no push)
+#   --summary   Compare local snapshot vs consolidated and output a JSON change summary
+#   --apply     Backup + import to local ~/.claude/ + push to remote
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/common.sh"
 
 QUIET=false
-AUTO_MERGE=false
+MODE="sync"  # sync | summary | apply
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --quiet) QUIET=true; BRAIN_QUIET=true; shift ;;
-    --auto-merge) AUTO_MERGE=true; shift ;;
+    --summary) MODE="summary"; shift ;;
+    --apply) MODE="apply"; shift ;;
+    --auto-merge) shift ;;  # ignored, kept for backward compat
     *) shift ;;
   esac
 done
 
+# ── --apply mode: backup + import + push, then exit ───────────────────────────
+if [ "$MODE" = "apply" ]; then
+  load_config
+  consolidated="${BRAIN_REPO}/consolidated/brain.json"
+  if [ ! -f "$consolidated" ]; then
+    log_error "No consolidated brain found. Run /brain-sync first."
+    exit 1
+  fi
+
+  # Import (includes backup)
+  "${SCRIPT_DIR}/import.sh" "$consolidated"
+  log_info "Brain changes applied to local."
+
+  # Push to remote
+  if brain_push_with_retry 3 2; then
+    local_tmp=$(brain_mktemp)
+    jq --arg ts "$(now_iso)" '.last_pull = $ts | .dirty = false' "$BRAIN_CONFIG" > "$local_tmp"
+    mv "$local_tmp" "$BRAIN_CONFIG"
+    log_info "Brain pushed to remote."
+  else
+    local_tmp=$(brain_mktemp)
+    jq --arg ts "$(now_iso)" '.last_pull = $ts | .dirty = true' "$BRAIN_CONFIG" > "$local_tmp"
+    mv "$local_tmp" "$BRAIN_CONFIG"
+    log_warn "Push failed. Will retry on next /brain-sync --apply."
+  fi
+  exit 0
+fi
+
+# ── --summary mode: diff local snapshot vs consolidated, output JSON ──────────
+if [ "$MODE" = "summary" ]; then
+  load_config
+  consolidated="${BRAIN_REPO}/consolidated/brain.json"
+  old_snapshot="${BRAIN_REPO}/machines/$(get_config machine_id)/brain-snapshot.json"
+
+  if [ ! -f "$consolidated" ]; then
+    echo '{"has_changes":false,"conflicts":0}'
+    exit 0
+  fi
+
+  # If no local snapshot to compare against, everything in consolidated is "incoming"
+  if [ ! -f "$old_snapshot" ]; then
+    old_snapshot_json='{}'
+  else
+    old_snapshot_json=$(cat "$old_snapshot")
+  fi
+
+  # Count conflicts from conflicts file
+  conflict_count=0
+  if [ -f "${HOME}/.claude/brain-conflicts.json" ]; then
+    conflict_count=$(jq '[.conflicts[] | select(.resolved != true)] | length' "${HOME}/.claude/brain-conflicts.json" 2>/dev/null || echo "0")
+  fi
+
+  # Generate summary by comparing snapshot (what we have locally) vs consolidated (merged result)
+  jq -n --argjson local "$old_snapshot_json" \
+        --argjson merged "$(cat "$consolidated")" \
+        --argjson conflict_count "$conflict_count" '
+    def diff_keys($a; $b):
+      (($b // {}) | keys) - (($a // {}) | keys);
+    def changed_keys($a; $b):
+      [($a // {}) | to_entries[] |
+        select(($b // {})[.key].hash != null and ($b // {})[.key].hash != .value.hash) |
+        .key];
+
+    ($local.declarative.rules // {}) as $lr |
+    ($merged.declarative.rules // {}) as $mr |
+    ($local.procedural.skills // {}) as $ls |
+    ($merged.procedural.skills // {}) as $ms |
+    ($local.procedural.agents // {}) as $la |
+    ($merged.procedural.agents // {}) as $ma |
+    ($local.declarative.claude_md.hash // "") as $lch |
+    ($merged.declarative.claude_md.hash // "") as $mch |
+    ($local.environmental.mcp_servers // {}) as $lmcp |
+    ($merged.environmental.mcp_servers // {}) as $mmcp |
+
+    (($mmcp | keys) - ($lmcp | keys)) as $mcp_added |
+
+    {
+      has_changes: (($lch != $mch) or
+        (diff_keys($lr; $mr) | length > 0) or (changed_keys($lr; $mr) | length > 0) or
+        (diff_keys($ls; $ms) | length > 0) or (changed_keys($ls; $ms) | length > 0) or
+        (diff_keys($la; $ma) | length > 0) or (changed_keys($la; $ma) | length > 0) or
+        ($mcp_added | length > 0)),
+      claude_md_changed: ($lch != $mch),
+      rules_added: diff_keys($lr; $mr),
+      rules_changed: changed_keys($lr; $mr),
+      skills_added: diff_keys($ls; $ms),
+      skills_changed: changed_keys($ls; $ms),
+      agents_added: diff_keys($la; $ma),
+      agents_changed: changed_keys($la; $ma),
+      mcp_servers_added: $mcp_added,
+      conflicts: $conflict_count
+    }
+  ' 2>/dev/null || echo '{"has_changes":false,"conflicts":0}'
+
+  if [ "$conflict_count" -gt 0 ]; then
+    log_info "${conflict_count} conflict(s) pending. Run /brain-conflicts to resolve."
+  fi
+  exit 0
+fi
+
+# ── Default sync mode: snapshot → pull → merge → commit locally (no push) ─────
 check_dependencies
 load_config
 
 machine_id=$(get_config "machine_id")
 
-# Step 1: snapshot current state first.
-# We do this at SessionStart (not SessionEnd) because SessionEnd doesn't fire
-# reliably when the user closes the terminal window. Snapshotting here ensures
-# we always capture the previous session's accumulated state before syncing.
+# Step 1: snapshot current state
 log_info "Taking snapshot of current brain state..."
 "${SCRIPT_DIR}/snapshot.sh" --quiet || log_warn "Snapshot failed — continuing with last committed state."
 
-# Pull --rebase: sync with remote after committing our snapshot.
-# Our local commit is rebased on top of remote — other machines' snapshots won't overwrite ours.
+# Step 2: pull --rebase
 brain_git pull --rebase origin main 2>/dev/null || {
   brain_git rebase --abort 2>/dev/null || true
   log_warn "Could not sync with remote. Working offline."
   exit 0
 }
 
-# Check if consolidated brain has changed
+# Record pre-merge hash
 local_consolidated_hash=""
 if [ -f "${BRAIN_REPO}/consolidated/brain.json" ]; then
   local_consolidated_hash=$(file_hash "${BRAIN_REPO}/consolidated/brain.json")
 fi
 
-# 2-way merge: consolidated (all other machines' merged state) + this machine's snapshot.
-# The consolidated already represents the full history of all previously synced machines.
-# We only need to fold in this machine's new changes.
+# Step 3: 2-way merge
 current_snapshot="${BRAIN_REPO}/machines/${machine_id}/brain-snapshot.json"
-current_snapshot_work=""   # path to the (possibly decrypted) snapshot we'll actually read
+current_snapshot_work=""
 
 if [ ! -f "$current_snapshot" ]; then
   log_info "No current snapshot found. Skipping merge."
@@ -71,7 +173,6 @@ mkdir -p "${BRAIN_REPO}/consolidated"
 
 if [ -n "$current_snapshot_work" ]; then
   if [ ! -f "${BRAIN_REPO}/consolidated/brain.json" ]; then
-    # No consolidated yet — current snapshot becomes the seed
     log_info "No consolidated brain found. Using current snapshot as base."
     cp "$current_snapshot_work" "${BRAIN_REPO}/consolidated/brain.json"
   else
@@ -84,67 +185,21 @@ if [ -n "$current_snapshot_work" ]; then
     mv "$merge_out" "${BRAIN_REPO}/consolidated/brain.json"
   fi
 
-  # Clean up temp decrypted file if one was created
   [ "$current_snapshot_work" != "$current_snapshot" ] && rm -f "$current_snapshot_work"
 fi
 
-# Apply consolidated brain locally (with validation and backup)
-"${SCRIPT_DIR}/import.sh" "${BRAIN_REPO}/consolidated/brain.json"
-
-# Log the merge (before commit so it's included in the same commit)
+# Step 4: log + commit locally (no push — push happens in --apply)
 new_consolidated_hash=$(file_hash "${BRAIN_REPO}/consolidated/brain.json")
 if [ "$local_consolidated_hash" != "$new_consolidated_hash" ]; then
   append_merge_log "pull+merge" "Merged consolidated brain"
 fi
 
-# Commit consolidated and push everything once (snapshot commit from snapshot.sh + consolidated)
 brain_git add consolidated/ meta/
 brain_git diff --cached --quiet 2>/dev/null || \
   brain_git commit -m "Consolidated: $(get_machine_name) merged at $(now_iso)" 2>/dev/null || true
 
-if brain_push_with_retry 3 2; then
-  local_tmp=$(brain_mktemp)
-  jq --arg ts "$(now_iso)" '.last_pull = $ts | .dirty = false' "$BRAIN_CONFIG" > "$local_tmp"
-  mv "$local_tmp" "$BRAIN_CONFIG"
-  log_info "Brain pushed."
-else
-  local_tmp=$(brain_mktemp)
-  jq --arg ts "$(now_iso)" '.last_pull = $ts | .dirty = true' "$BRAIN_CONFIG" > "$local_tmp"
-  mv "$local_tmp" "$BRAIN_CONFIG"
-  log_warn "Push failed. Will retry next session."
-fi
-
-# Check if auto-evolve is due
-if [ -f "$DEFAULTS_FILE" ]; then
-  evolve_interval_days="" last_evolved="" days_since_evolve=""
-  evolve_interval_days=$(jq -r '.evolve_interval_days // 7' "$DEFAULTS_FILE")
-  last_evolved=$(jq -r '.last_evolved // null' "$BRAIN_CONFIG")
-
-  if [ "$last_evolved" = "null" ] || [ -z "$last_evolved" ]; then
-    # Never evolved, set to now to start the timer
-    local_tmp=$(brain_mktemp)
-    jq --arg ts "$(now_iso)" '.last_evolved = $ts' "$BRAIN_CONFIG" > "$local_tmp"
-    mv "$local_tmp" "$BRAIN_CONFIG"
-  else
-    # Calculate days since last evolution
-    if command -v date &>/dev/null; then
-      last_evolved_ts="" current_ts=""
-      last_evolved_ts=$(date -d "$last_evolved" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%SZ" "$last_evolved" +%s 2>/dev/null || echo "0")
-      current_ts=$(date +%s)
-      days_since_evolve=$(( (current_ts - last_evolved_ts) / 86400 ))
-
-      if [ "$days_since_evolve" -ge "$evolve_interval_days" ]; then
-        log_info "Auto-evolve due (${days_since_evolve} days since last evolution)..."
-        "${SCRIPT_DIR}/evolve.sh" --auto 2>/dev/null || {
-          log_warn "Auto-evolve failed. Run /brain-evolve manually."
-        }
-      fi
-    fi
-  fi
-fi
-
 if [ "$local_consolidated_hash" != "$new_consolidated_hash" ]; then
-  log_info "Brain synced: consolidated brain updated."
+  log_info "Brain synced: consolidated brain updated. Run --summary to review, --apply to import and push."
 else
   log_info "Brain synced: no changes."
 fi
