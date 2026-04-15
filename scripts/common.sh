@@ -250,13 +250,18 @@ log_error() { brain_log "ERROR" "$@"; }
 
 append_merge_log() {
   local action="$1" summary="$2"
-  local log_file="${BRAIN_REPO}/meta/merge-log.json"
-  local timestamp
-  timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
   local machine_id
   machine_id=$(get_machine_id)
   local machine_name
   machine_name=$(get_machine_name)
+
+  # Per-machine log file to avoid git conflicts between machines
+  local log_dir="${BRAIN_REPO}/meta/logs"
+  mkdir -p "$log_dir"
+  local log_file="${log_dir}/${machine_id}.json"
+
+  local timestamp
+  timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
   if [ ! -f "$log_file" ]; then
     echo '{"entries":[]}' > "$log_file"
