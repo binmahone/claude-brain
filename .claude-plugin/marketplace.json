@@ -1,27 +1,19 @@
 {
-  "name": "claude-brain-sync",
+  "name": "claude-brain",
   "owner": {
-    "name": "edvatar"
+    "name": "binmahone",
+    "url": "https://github.com/binmahone"
   },
   "metadata": {
-    "description": "Sync your Claude Code brain across machines — memory, skills, agents, rules, and settings with intelligent semantic merge.",
-    "version": "0.1.0"
+    "description": "Sync your Claude Code brain across machines — memory, skills, agents, rules, and settings with 3-way semantic merge. Manual sync with approval.",
+    "version": "0.2.0"
   },
   "plugins": [
     {
       "name": "claude-brain-sync",
       "source": "./",
-      "description": "Sync and evolve your Claude Code brain across machines. Automatically exports, merges, and applies your accumulated knowledge across all your development machines via Git.",
-      "version": "0.1.0",
-      "author": {
-        "name": "edvatar"
-      },
-      "homepage": "https://github.com/toroleapinc/claude-brain",
-      "repository": "https://github.com/toroleapinc/claude-brain",
-      "license": "MIT",
-      "keywords": ["sync", "memory", "brain", "multi-machine", "merge", "dotfiles", "productivity"],
-      "category": "productivity",
-      "tags": ["sync", "memory", "cross-machine", "semantic-merge"]
+      "description": "Sync Claude Code memory, skills, agents, rules, and settings across machines via Git. 3-way merge, user approval before every import/push, automatic backups.",
+      "version": "0.2.0"
     }
   ]
 }
