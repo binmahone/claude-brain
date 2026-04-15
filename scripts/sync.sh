@@ -220,7 +220,9 @@ if [ "$local_consolidated_hash" != "$new_consolidated_hash" ]; then
   append_merge_log "pull+merge" "Merged consolidated brain"
 fi
 
-brain_git add consolidated/ "meta/machines/${machine_id}.json" "meta/logs/${machine_id}.json" 2>/dev/null || true
+brain_git add consolidated/ 2>/dev/null || true
+brain_git add "meta/machines/${machine_id}.json" 2>/dev/null || true
+brain_git add "meta/logs/${machine_id}.json" 2>/dev/null || true
 brain_git diff --cached --quiet 2>/dev/null || \
   brain_git commit -m "Consolidated: $(get_machine_name) merged at $(now_iso)" 2>/dev/null || true
 
