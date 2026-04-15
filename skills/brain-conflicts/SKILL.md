@@ -1,10 +1,13 @@
 ---
 name: brain-conflicts
-description: Review and resolve unresolved brain merge conflicts.
+description: Review and resolve unresolved brain merge conflicts that were skipped during sync/join/evolve.
 ---
 
 
-The user wants to resolve pending brain merge conflicts.
+The user wants to resolve pending brain merge conflicts that were deferred earlier.
+
+Note: Conflicts are normally resolved inline during /brain-sync, /brain-join, or
+/brain-evolve. This command is a fallback for conflicts that were skipped at that time.
 
 ## Steps
 
@@ -18,21 +21,18 @@ The user wants to resolve pending brain merge conflicts.
 3. If no unresolved conflicts, tell the user: "No pending conflicts. Brain is fully synced."
 
 4. For each unresolved conflict, present:
-   - The topic
-   - What Machine A says
-   - What Machine B says
-   - The AI's suggestion and confidence level
+   - The section and filename
+   - What the consolidated version says (from other machines)
+   - What the local version says (this machine)
 
    Ask the user to choose:
-   - **Accept AI suggestion**: Apply the suggestion
-   - **Keep Machine A's version**: Use A's content
-   - **Keep Machine B's version**: Use B's content
-   - **Keep both (machine-specific)**: Tag each with its machine name
-   - **Custom**: Let the user type their own resolution
+   - **Keep consolidated**: Use the version from other machines
+   - **Keep local**: Use this machine's version
+   - **Custom**: Let the user type or edit their own merged content
 
 5. After each resolution:
    - Mark the conflict as `resolved: true` with the chosen resolution in brain-conflicts.json
-   - Apply the resolution to the appropriate brain file (CLAUDE.md, memory, etc.)
+   - Apply the resolution to the consolidated brain file and corresponding local file
 
 6. After all conflicts are resolved:
    ```bash

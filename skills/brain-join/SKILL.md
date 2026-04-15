@@ -152,28 +152,38 @@ The Git remote URL is provided as: $ARGUMENTS
     ```bash
     bash "${CLAUDE_PLUGIN_ROOT}/scripts/sync.sh" --summary
     ```
-    Present the summary: new/changed rules, skills, agents, memory, settings, conflicts.
-    **Ask the user for approval**: "Apply these changes to your local Claude Code config?"
+    Present the summary: new/changed rules, skills, agents, memory, settings.
+    **If `mcp_servers_added` is non-empty, highlight it.**
 
-11. If the user approves, import:
+11. If there are conflicts, read and present each one inline:
+    ```bash
+    cat ~/.claude/brain-conflicts.json 2>/dev/null || echo '{"conflicts":[]}'
+    ```
+    For each unresolved conflict, show both sides and ask the user to choose:
+    - **Keep consolidated** / **Keep local** / **Custom** / **Skip**
+    Mark resolved conflicts in brain-conflicts.json and update the consolidated brain.
+
+12. **Ask the user for approval**: "Apply these changes to your local Claude Code config and push?"
+
+13. If the user approves, import and push:
     ```bash
     bash "${CLAUDE_PLUGIN_ROOT}/scripts/import.sh" "$CONSOLIDATED"
-    ```
-    Tell the user: "A backup of your pre-join state was saved to ~/.claude/brain-backups/."
-
-12. If the user declines, skip import. Tell the user:
-    "Skipped import. Your machine is registered and snapshot pushed, but no remote changes were applied locally. Run /brain-sync to review and apply later."
-
-13. Commit consolidated and push:
-    ```bash
     cd ~/.claude/brain-repo
     git add consolidated/
     git commit -m "Join: $(hostname) consolidated brain"
     git push origin main
     ```
+    Tell the user: "A backup of your pre-join state was saved to ~/.claude/brain-backups/."
 
-14. Confirm success:
+14. If the user declines, skip import. Still commit and push the snapshot only:
+    ```bash
+    cd ~/.claude/brain-repo
+    git push origin main
+    ```
+    Tell the user:
+    "Skipped import. Your machine is registered and snapshot pushed, but no remote changes were applied locally. Run /brain-sync to review and apply later."
+
+15. Confirm success:
     - Show how many machines are now in the network
     - Show what was imported/merged (or note that import was skipped)
     - Note: "Sync is manual — run /brain-sync to pull and apply changes from other machines."
-    - If there are conflicts: suggest /brain-conflicts
