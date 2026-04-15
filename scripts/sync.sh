@@ -114,12 +114,18 @@ if [ "$MODE" = "summary" ]; then
 
     (($mmcp | keys) - ($lmcp | keys)) as $mcp_added |
 
+    # Memory changes: files in consolidated not in local snapshot (or different hash)
+    ([$merged.experiential.auto_memory // {} | to_entries[] |
+      .key as $proj | .value // {} | to_entries[] |
+      select(($local.experiential.auto_memory[$proj][.key].hash // null) != .value.hash)
+    ] | length > 0) as $memory_changed |
+
     {
       has_changes: (($lch != $mch) or
         (diff_keys($lr; $mr) | length > 0) or (changed_keys($lr; $mr) | length > 0) or
         (diff_keys($ls; $ms) | length > 0) or (changed_keys($ls; $ms) | length > 0) or
         (diff_keys($la; $ma) | length > 0) or (changed_keys($la; $ma) | length > 0) or
-        ($mcp_added | length > 0)),
+        ($mcp_added | length > 0) or $memory_changed),
       claude_md_changed: ($lch != $mch),
       rules_added: diff_keys($lr; $mr),
       rules_changed: changed_keys($lr; $mr),

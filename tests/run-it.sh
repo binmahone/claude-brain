@@ -108,27 +108,64 @@ JSON
   chmod 600 "$claude_dir/brain-config.json"
 }
 
-# Run one full sync cycle for a machine (snapshot → pull → merge → import → push).
-sync_machine() {
+# Common env vars for running scripts as a given machine.
+machine_env() {
   local tdir="$1" mname="$2"
+  local mhome="$tdir/machines/$mname/home"
+  local claude_dir="$mhome/.claude"
+  echo "HOME=$mhome CLAUDE_DIR=$claude_dir CLAUDE_JSON=$mhome/.claude.json BRAIN_REPO=$claude_dir/brain-repo BRAIN_CONFIG=$claude_dir/brain-config.json BRAIN_QUIET=true"
+}
+
+# Run a brain script as a given machine.
+run_as() {
+  local tdir="$1" mname="$2"; shift 2
   local mhome="$tdir/machines/$mname/home"
   local claude_dir="$mhome/.claude"
 
   if $VERBOSE; then
     HOME="$mhome" \
       CLAUDE_DIR="$claude_dir" \
+      CLAUDE_JSON="$mhome/.claude.json" \
       BRAIN_REPO="$claude_dir/brain-repo" \
       BRAIN_CONFIG="$claude_dir/brain-config.json" \
       BRAIN_QUIET=true \
-      bash "$BRAIN_SCRIPTS/sync.sh" --quiet
+      "$@"
   else
     HOME="$mhome" \
       CLAUDE_DIR="$claude_dir" \
+      CLAUDE_JSON="$mhome/.claude.json" \
       BRAIN_REPO="$claude_dir/brain-repo" \
       BRAIN_CONFIG="$claude_dir/brain-config.json" \
       BRAIN_QUIET=true \
-      bash "$BRAIN_SCRIPTS/sync.sh" --quiet >/dev/null 2>&1
+      "$@" >/dev/null 2>&1
   fi
+}
+
+# Run one full sync cycle for a machine (snapshot → pull → merge → commit → import → push).
+sync_machine() {
+  local tdir="$1" mname="$2"
+  run_as "$tdir" "$mname" bash "$BRAIN_SCRIPTS/sync.sh" --quiet
+  run_as "$tdir" "$mname" bash "$BRAIN_SCRIPTS/sync.sh" --apply --quiet
+}
+
+# Run sync WITHOUT apply (merge + commit locally, no import, no push).
+sync_machine_no_apply() {
+  local tdir="$1" mname="$2"
+  run_as "$tdir" "$mname" bash "$BRAIN_SCRIPTS/sync.sh" --quiet
+}
+
+# Get sync summary JSON for a machine.
+get_summary() {
+  local tdir="$1" mname="$2"
+  local mhome="$tdir/machines/$mname/home"
+  local claude_dir="$mhome/.claude"
+  HOME="$mhome" \
+    CLAUDE_DIR="$claude_dir" \
+    CLAUDE_JSON="$mhome/.claude.json" \
+    BRAIN_REPO="$claude_dir/brain-repo" \
+    BRAIN_CONFIG="$claude_dir/brain-config.json" \
+    BRAIN_QUIET=true \
+    bash "$BRAIN_SCRIPTS/sync.sh" --summary 2>/dev/null
 }
 
 # Resolve pending conflicts for a machine using LLM (calls claude -p).
@@ -137,25 +174,9 @@ resolve_conflicts() {
   local mhome="$tdir/machines/$mname/home"
   local claude_dir="$mhome/.claude"
 
-  if $VERBOSE; then
-    HOME="$mhome" \
-      REAL_HOME="$ORIG_HOME" \
-      CLAUDE_DIR="$claude_dir" \
-      BRAIN_REPO="$claude_dir/brain-repo" \
-      BRAIN_CONFIG="$claude_dir/brain-config.json" \
-      CONFLICTS_FILE="$claude_dir/brain-conflicts.json" \
-      BRAIN_QUIET=true \
-      bash "$BRAIN_SCRIPTS/resolve-conflicts.sh" --quiet
-  else
-    HOME="$mhome" \
-      REAL_HOME="$ORIG_HOME" \
-      CLAUDE_DIR="$claude_dir" \
-      BRAIN_REPO="$claude_dir/brain-repo" \
-      BRAIN_CONFIG="$claude_dir/brain-config.json" \
-      CONFLICTS_FILE="$claude_dir/brain-conflicts.json" \
-      BRAIN_QUIET=true \
-      bash "$BRAIN_SCRIPTS/resolve-conflicts.sh" --quiet >/dev/null 2>&1
-  fi
+  REAL_HOME="$ORIG_HOME" \
+  CONFLICTS_FILE="$claude_dir/brain-conflicts.json" \
+  run_as "$tdir" "$mname" bash "$BRAIN_SCRIPTS/resolve-conflicts.sh" --quiet
 }
 
 # Check how many unresolved conflicts a machine has.
@@ -1029,6 +1050,256 @@ test_claude_md_conflict_resolve() {
   echo "$result" | grep -qi "unit test"
 }
 
+# ══════════════════════════════════════════════════════════════════════════════
+# 3-way merge tests
+# ══════════════════════════════════════════════════════════════════════════════
+
+# IT-12: 3-way merge — outgoing only. Beta modifies a file locally, alpha
+# hasn't changed anything. With baseline, beta's change should go through
+# with NO conflict.
+test_3way_outgoing_only() {
+  local tdir
+  tdir=$(make_test_env "it12")
+  setup_machine "$tdir" "alpha" "a012"
+  setup_machine "$tdir" "beta"  "b012"
+
+  ensure_project "$tdir" "alpha" "-home-proj"
+  ensure_project "$tdir" "beta"  "-home-proj"
+
+  # Both start with same file
+  write_mem "$tdir" "alpha" "-home-proj" "notes.md" "original content"
+  sync_machine "$tdir" "alpha"
+  sync_machine "$tdir" "beta"
+  # Now beta has baseline (from apply)
+
+  # Beta modifies the file locally, alpha doesn't touch it
+  write_mem "$tdir" "beta" "-home-proj" "notes.md" "modified by beta"
+  sync_machine "$tdir" "beta"
+
+  # Should have NO conflict (3-way: only snapshot changed)
+  [ "$(conflict_count "$tdir" "beta")" -eq 0 ] || return 1
+
+  # Consolidated should have beta's version
+  local consolidated="$tdir/machines/beta/home/.claude/brain-repo/consolidated/brain.json"
+  jq -r '.experiential.auto_memory["-home-proj"]["notes.md"].content' "$consolidated" \
+    | grep -q "modified by beta"
+}
+
+# IT-13: 3-way merge — incoming only. Alpha modifies a file and pushes,
+# beta hasn't changed it. Beta should receive the update with NO conflict.
+test_3way_incoming_only() {
+  local tdir
+  tdir=$(make_test_env "it13")
+  setup_machine "$tdir" "alpha" "a013"
+  setup_machine "$tdir" "beta"  "b013"
+
+  ensure_project "$tdir" "alpha" "-home-proj"
+  ensure_project "$tdir" "beta"  "-home-proj"
+
+  # Both start with same file
+  write_mem "$tdir" "alpha" "-home-proj" "notes.md" "original content"
+  sync_machine "$tdir" "alpha"
+  sync_machine "$tdir" "beta"
+
+  # Alpha modifies, beta doesn't
+  write_mem "$tdir" "alpha" "-home-proj" "notes.md" "updated by alpha"
+  sync_machine "$tdir" "alpha"
+  sync_machine "$tdir" "beta"
+
+  # No conflict (3-way: only consolidated changed)
+  [ "$(conflict_count "$tdir" "beta")" -eq 0 ] || return 1
+
+  # Beta should have alpha's updated content
+  read_mem "$tdir" "beta" "-home-proj" "notes.md" | grep -q "updated by alpha"
+}
+
+# IT-14: 3-way merge — real conflict. Both machines modify the same file
+# differently. Should produce exactly one conflict.
+test_3way_real_conflict() {
+  local tdir
+  tdir=$(make_test_env "it14")
+  setup_machine "$tdir" "alpha" "a014"
+  setup_machine "$tdir" "beta"  "b014"
+
+  ensure_project "$tdir" "alpha" "-home-proj"
+  ensure_project "$tdir" "beta"  "-home-proj"
+
+  # Both start with same file
+  write_mem "$tdir" "alpha" "-home-proj" "prefs.md" "original prefs"
+  sync_machine "$tdir" "alpha"
+  sync_machine "$tdir" "beta"
+
+  # Both modify the same file differently
+  write_mem "$tdir" "alpha" "-home-proj" "prefs.md" "alpha version"
+  write_mem "$tdir" "beta"  "-home-proj" "prefs.md" "beta version"
+
+  sync_machine "$tdir" "alpha"
+
+  # Beta syncs — should detect a real conflict
+  # (use sync_machine_no_apply + manual apply to check conflict before apply)
+  sync_machine_no_apply "$tdir" "beta"
+  [ "$(conflict_count "$tdir" "beta")" -gt 0 ] || return 1
+  # Apply anyway (consolidated version wins for now)
+  run_as "$tdir" "beta" bash "$BRAIN_SCRIPTS/sync.sh" --apply --quiet
+}
+
+# IT-15: Without baseline, merge falls back to 2-way. First sync for a
+# machine that has never applied should still work (no baseline.json exists).
+test_3way_fallback_to_2way() {
+  local tdir
+  tdir=$(make_test_env "it15")
+  setup_machine "$tdir" "alpha" "a015"
+  setup_machine "$tdir" "beta"  "b015"
+
+  ensure_project "$tdir" "alpha" "-home-proj"
+  ensure_project "$tdir" "beta"  "-home-proj"
+
+  write_mem "$tdir" "alpha" "-home-proj" "data.md" "from alpha"
+  sync_machine "$tdir" "alpha"
+
+  # Beta has no baseline yet — should still sync successfully (2-way fallback)
+  local beta_baseline="$tdir/machines/beta/home/.claude/brain-repo/machines/b015/baseline.json"
+  [ ! -f "$beta_baseline" ] || return 1  # confirm no baseline
+
+  sync_machine "$tdir" "beta"
+  has_mem "$tdir" "beta" "-home-proj" "data.md" || return 1
+
+  # After apply, baseline should now exist
+  [ -f "$beta_baseline" ] || return 1
+}
+
+# IT-16: Baseline lifecycle — after apply, baseline.json should equal
+# consolidated/brain.json.
+test_baseline_saved_after_apply() {
+  local tdir
+  tdir=$(make_test_env "it16")
+  setup_machine "$tdir" "alpha" "a016"
+
+  ensure_project "$tdir" "alpha" "-home-proj"
+  write_mem "$tdir" "alpha" "-home-proj" "file.md" "test content"
+
+  sync_machine "$tdir" "alpha"
+
+  local baseline="$tdir/machines/alpha/home/.claude/brain-repo/machines/a016/baseline.json"
+  local consolidated="$tdir/machines/alpha/home/.claude/brain-repo/consolidated/brain.json"
+
+  [ -f "$baseline" ] || return 1
+  # Baseline should be identical to consolidated
+  local bh ch
+  bh=$(sha256sum "$baseline" | cut -d' ' -f1)
+  ch=$(sha256sum "$consolidated" | cut -d' ' -f1)
+  [ "$bh" = "$ch" ]
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Summary + safety tests
+# ══════════════════════════════════════════════════════════════════════════════
+
+# IT-17: --summary reports has_outgoing=true when there are unpushed commits
+# but no incoming changes.
+test_summary_outgoing_only() {
+  local tdir
+  tdir=$(make_test_env "it17")
+  setup_machine "$tdir" "alpha" "a017"
+
+  ensure_project "$tdir" "alpha" "-home-proj"
+  write_mem "$tdir" "alpha" "-home-proj" "local.md" "local only"
+
+  # Sync without apply — creates local commit but doesn't push
+  sync_machine_no_apply "$tdir" "alpha"
+
+  local summary
+  summary=$(get_summary "$tdir" "alpha")
+
+  echo "$summary" | jq -e '.has_outgoing == true' >/dev/null || return 1
+  echo "$summary" | jq -e '.has_changes == false' >/dev/null || return 1
+}
+
+# IT-18: --summary reports has_changes=true when there are incoming changes.
+test_summary_incoming_changes() {
+  local tdir
+  tdir=$(make_test_env "it18")
+  setup_machine "$tdir" "alpha" "a018"
+  setup_machine "$tdir" "beta"  "b018"
+
+  ensure_project "$tdir" "alpha" "-home-proj"
+  ensure_project "$tdir" "beta"  "-home-proj"
+
+  write_mem "$tdir" "alpha" "-home-proj" "from-alpha.md" "alpha content"
+  sync_machine "$tdir" "alpha"
+
+  # Beta syncs (pull + merge) but does NOT apply
+  sync_machine_no_apply "$tdir" "beta"
+
+  local summary
+  summary=$(get_summary "$tdir" "beta")
+
+  echo "$summary" | jq -e '.has_changes == true' >/dev/null || return 1
+}
+
+# IT-19: Backup failure blocks import. If the backup directory is not writable,
+# import.sh should exit with error instead of proceeding.
+test_backup_failure_blocks_import() {
+  local tdir
+  tdir=$(make_test_env "it19")
+  setup_machine "$tdir" "alpha" "a019"
+
+  ensure_project "$tdir" "alpha" "-home-proj"
+  write_mem "$tdir" "alpha" "-home-proj" "data.md" "test"
+  sync_machine_no_apply "$tdir" "alpha"
+
+  # Make backup dir non-writable to simulate failure
+  local backup_dir="$tdir/machines/alpha/home/.claude/brain-backups"
+  mkdir -p "$backup_dir"
+  chmod 000 "$backup_dir"
+
+  # Apply should fail because backup can't be created
+  local rc=0
+  run_as "$tdir" "alpha" bash "$BRAIN_SCRIPTS/sync.sh" --apply --quiet || rc=$?
+
+  # Restore permissions for cleanup
+  chmod 755 "$backup_dir"
+
+  [ "$rc" -ne 0 ] || return 1
+}
+
+# IT-20: Invalid JSON merge preserves original file. If the jq merge for
+# settings.json produces bad output, the original file should be untouched.
+test_invalid_json_merge_preserves_original() {
+  local tdir
+  tdir=$(make_test_env "it20")
+  setup_machine "$tdir" "alpha" "a020"
+  setup_machine "$tdir" "beta"  "b020"
+
+  # Create a valid settings.json on beta
+  local beta_claude="$tdir/machines/beta/home/.claude"
+  echo '{"permissions":{"allow":["bash"]}}' > "$beta_claude/settings.json"
+
+  # Create a consolidated brain with corrupt settings content on alpha,
+  # then push it so beta will pull it
+  ensure_project "$tdir" "alpha" "-home-proj"
+  write_mem "$tdir" "alpha" "-home-proj" "dummy.md" "trigger sync"
+  sync_machine "$tdir" "alpha"
+
+  # Manually corrupt the settings content in consolidated brain
+  local consolidated="$tdir/machines/alpha/home/.claude/brain-repo/consolidated/brain.json"
+  local tmp_c
+  tmp_c=$(mktemp)
+  jq '.environmental.settings.content = "NOT VALID JSON STRING"' "$consolidated" > "$tmp_c"
+  mv "$tmp_c" "$consolidated"
+  # Commit and push the corrupt consolidated
+  git -C "$tdir/machines/alpha/home/.claude/brain-repo" add consolidated/
+  git -C "$tdir/machines/alpha/home/.claude/brain-repo" commit -m "corrupt settings" -q 2>/dev/null
+  git -C "$tdir/machines/alpha/home/.claude/brain-repo" push origin main -q 2>/dev/null
+
+  # Beta syncs — the settings merge should fail gracefully
+  sync_machine "$tdir" "beta"
+
+  # Beta's settings.json should still be the original valid JSON
+  jq empty "$beta_claude/settings.json" 2>/dev/null || return 1
+  jq -e '.permissions.allow[0] == "bash"' "$beta_claude/settings.json" >/dev/null || return 1
+}
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 echo ""
 echo "=== claude-brain Integration Tests ==="
@@ -1049,6 +1320,21 @@ run_test test_sequential_edits_same_file_no_conflict
 echo ""
 echo "--- Lifecycle test ---"
 run_test test_full_lifecycle
+
+echo ""
+echo "--- 3-way merge tests ---"
+run_test test_3way_outgoing_only
+run_test test_3way_incoming_only
+run_test test_3way_real_conflict
+run_test test_3way_fallback_to_2way
+run_test test_baseline_saved_after_apply
+
+echo ""
+echo "--- Summary + safety tests ---"
+run_test test_summary_outgoing_only
+run_test test_summary_incoming_changes
+run_test test_backup_failure_blocks_import
+run_test test_invalid_json_merge_preserves_original
 
 echo ""
 echo "--- Conflict resolution tests (LLM) ---"

@@ -522,7 +522,10 @@ backup_before_import() {
   local timestamp
   timestamp=$(date +%Y%m%d-%H%M%S)
   local backup_path="${BACKUP_DIR}/${timestamp}"
-  mkdir -p "$backup_path"
+  if ! mkdir -p "$backup_path" 2>/dev/null; then
+    log_error "Cannot create backup directory: ${backup_path}"
+    return 1
+  fi
 
   # Back up key files
   [ -f "${CLAUDE_DIR}/CLAUDE.md" ] && cp "${CLAUDE_DIR}/CLAUDE.md" "${backup_path}/" 2>/dev/null || true

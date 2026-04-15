@@ -103,7 +103,9 @@ fi
 # Args: BASE_JSON OTHER_JSON LABEL [ANCESTOR_JSON]
 # Each JSON is: { "filename": { "content": "...", "hash": "..." } }
 merge_fileset() {
-  local base_json="$1" other_json="$2" label="$3" ancestor_json="${4:-{}}"
+  local base_json="$1" other_json="$2" label="$3"
+  local ancestor_json="${4-}"
+  if [ -z "$ancestor_json" ]; then ancestor_json="{}"; fi
 
   if $THREE_WAY && [ "$ancestor_json" != "{}" ]; then
     # ── 3-way merge ──────────────────────────────────────────────────────
