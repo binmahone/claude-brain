@@ -35,15 +35,6 @@ if [ "$MODE" = "apply" ]; then
   "${SCRIPT_DIR}/import.sh" "$consolidated"
   log_info "Brain changes applied to local."
 
-  # Save baseline for 3-way merge on next sync
-  machine_id=$(get_config "machine_id")
-  baseline="${BRAIN_REPO}/machines/${machine_id}/baseline.json"
-  cp "$consolidated" "$baseline"
-  brain_git add "machines/${machine_id}/baseline.json" 2>/dev/null || true
-  brain_git diff --cached --quiet 2>/dev/null || \
-    brain_git commit -m "Baseline: $(get_machine_name) at $(now_iso)" 2>/dev/null || true
-  log_info "Baseline saved for 3-way merge."
-
   # Push to remote
   if brain_push_with_retry 3 2; then
     local_tmp=$(brain_mktemp)
@@ -66,7 +57,7 @@ if [ "$MODE" = "summary" ]; then
   old_snapshot="${BRAIN_REPO}/machines/$(get_config machine_id)/brain-snapshot.json"
 
   if [ ! -f "$consolidated" ]; then
-    echo '{"has_changes":false,"conflicts":0}'
+    echo '{"has_changes":false,"has_outgoing":false,"conflicts":0}'
     exit 0
   fi
 
@@ -155,30 +146,28 @@ machine_id=$(get_config "machine_id")
 log_info "Taking snapshot of current brain state..."
 "${SCRIPT_DIR}/snapshot.sh" --quiet || log_warn "Snapshot failed — continuing with last committed state."
 
-# Step 2: pull --rebase (stash dirty working tree first)
-stashed=false
-if ! brain_git diff --quiet 2>/dev/null; then
-  brain_git stash --quiet 2>/dev/null && stashed=true
+# Step 2: save pre-pull consolidated as baseline for 3-way merge
+baseline_tmp=""
+if [ -f "${BRAIN_REPO}/consolidated/brain.json" ]; then
+  baseline_tmp=$(brain_mktemp)
+  cp "${BRAIN_REPO}/consolidated/brain.json" "$baseline_tmp"
 fi
 
+# Step 3: pull --rebase
 brain_git pull --rebase origin main 2>/dev/null || {
   brain_git rebase --abort 2>/dev/null || true
-  [ "$stashed" = true ] && brain_git stash pop --quiet 2>/dev/null || true
   log_warn "Could not sync with remote. Working offline."
   exit 0
 }
 
-[ "$stashed" = true ] && brain_git stash pop --quiet 2>/dev/null || true
-
-# Record pre-merge hash
+# Record pre-merge hash (of the post-pull consolidated)
 local_consolidated_hash=""
 if [ -f "${BRAIN_REPO}/consolidated/brain.json" ]; then
   local_consolidated_hash=$(file_hash "${BRAIN_REPO}/consolidated/brain.json")
 fi
 
-# Step 3: merge (3-way if baseline exists, otherwise 2-way)
+# Step 4: merge (3-way if baseline available, otherwise 2-way)
 current_snapshot="${BRAIN_REPO}/machines/${machine_id}/brain-snapshot.json"
-baseline="${BRAIN_REPO}/machines/${machine_id}/baseline.json"
 current_snapshot_work=""
 
 if [ ! -f "$current_snapshot" ]; then
@@ -211,9 +200,9 @@ if [ -n "$current_snapshot_work" ]; then
     log_info "Merging with consolidated brain..."
     merge_out=$(brain_mktemp)
     merge_args=("${BRAIN_REPO}/consolidated/brain.json" "$current_snapshot_work" "$merge_out")
-    # Pass baseline as 4th arg for 3-way merge if available
-    if [ -f "$baseline" ]; then
-      merge_args+=("$baseline")
+    # Pass pre-pull consolidated as ancestor for 3-way merge
+    if [ -n "$baseline_tmp" ] && [ -f "$baseline_tmp" ]; then
+      merge_args+=("$baseline_tmp")
     fi
     "${SCRIPT_DIR}/merge.sh" "${merge_args[@]}"
     mv "$merge_out" "${BRAIN_REPO}/consolidated/brain.json"
@@ -222,7 +211,7 @@ if [ -n "$current_snapshot_work" ]; then
   [ "$current_snapshot_work" != "$current_snapshot" ] && rm -f "$current_snapshot_work"
 fi
 
-# Step 4: log + commit locally (no push — push happens in --apply)
+# Step 5: log + commit locally (no push — push happens in --apply)
 new_consolidated_hash=$(file_hash "${BRAIN_REPO}/consolidated/brain.json")
 if [ "$local_consolidated_hash" != "$new_consolidated_hash" ]; then
   append_merge_log "pull+merge" "Merged consolidated brain"

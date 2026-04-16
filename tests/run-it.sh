@@ -1143,8 +1143,8 @@ test_3way_real_conflict() {
   run_as "$tdir" "beta" bash "$BRAIN_SCRIPTS/sync.sh" --apply --quiet
 }
 
-# IT-15: Without baseline, merge falls back to 2-way. First sync for a
-# machine that has never applied should still work (no baseline.json exists).
+# IT-15: First sync for a new machine falls back to 2-way (no pre-pull
+# consolidated exists). Should still work correctly.
 test_3way_fallback_to_2way() {
   local tdir
   tdir=$(make_test_env "it15")
@@ -1157,38 +1157,41 @@ test_3way_fallback_to_2way() {
   write_mem "$tdir" "alpha" "-home-proj" "data.md" "from alpha"
   sync_machine "$tdir" "alpha"
 
-  # Beta has no baseline yet — should still sync successfully (2-way fallback)
-  local beta_baseline="$tdir/machines/beta/home/.claude/brain-repo/machines/b015/baseline.json"
-  [ ! -f "$beta_baseline" ] || return 1  # confirm no baseline
-
+  # Beta's first sync — no pre-pull consolidated to use as baseline
   sync_machine "$tdir" "beta"
   has_mem "$tdir" "beta" "-home-proj" "data.md" || return 1
-
-  # After apply, baseline should now exist
-  [ -f "$beta_baseline" ] || return 1
 }
 
-# IT-16: Baseline lifecycle — after apply, baseline.json should equal
-# consolidated/brain.json.
-test_baseline_saved_after_apply() {
+# IT-16: After sync+apply, the SECOND subsequent sync (not the first) with
+# no content changes produces zero new commits. The first sync after apply
+# legitimately commits because import wrote new files to local disk.
+test_no_spurious_commits_after_stabilize() {
   local tdir
   tdir=$(make_test_env "it16")
   setup_machine "$tdir" "alpha" "a016"
+  setup_machine "$tdir" "beta"  "b016"
 
   ensure_project "$tdir" "alpha" "-home-proj"
-  write_mem "$tdir" "alpha" "-home-proj" "file.md" "test content"
+  ensure_project "$tdir" "beta"  "-home-proj"
 
+  write_mem "$tdir" "alpha" "-home-proj" "data.md" "shared content"
   sync_machine "$tdir" "alpha"
+  sync_machine "$tdir" "beta"     # apply imports data.md to local
 
-  local baseline="$tdir/machines/alpha/home/.claude/brain-repo/machines/a016/baseline.json"
-  local consolidated="$tdir/machines/alpha/home/.claude/brain-repo/consolidated/brain.json"
+  # First sync after apply — may commit (import changed local files)
+  sync_machine "$tdir" "beta"
 
-  [ -f "$baseline" ] || return 1
-  # Baseline should be identical to consolidated
-  local bh ch
-  bh=$(sha256sum "$baseline" | cut -d' ' -f1)
-  ch=$(sha256sum "$consolidated" | cut -d' ' -f1)
-  [ "$bh" = "$ch" ]
+  # NOW count commits
+  local commits_before
+  commits_before=$(git -C "$tdir/machines/beta/home/.claude/brain-repo" rev-list --count HEAD)
+
+  # Third sync — nothing changed, should be stable
+  sync_machine "$tdir" "beta"
+
+  local commits_after
+  commits_after=$(git -C "$tdir/machines/beta/home/.claude/brain-repo" rev-list --count HEAD)
+
+  [ "$commits_before" = "$commits_after" ] || return 1
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1505,6 +1508,70 @@ test_outgoing_push_propagates() {
   read_mem "$tdir" "beta" "-home-proj" "new-idea.md" | grep -q "brilliant idea" || return 1
 }
 
+# IT-28: After a full sync+apply cycle with incoming changes, the system
+# stabilizes — no spurious commits from placeholder hashes or timestamps.
+# (Needs 2 syncs after apply to stabilize: first reflects import, second is stable.)
+test_no_hash_mismatch_after_merge() {
+  local tdir
+  tdir=$(make_test_env "it28")
+  setup_machine "$tdir" "alpha" "a028"
+  setup_machine "$tdir" "beta"  "b028"
+
+  ensure_project "$tdir" "alpha" "-home-proj"
+  ensure_project "$tdir" "beta"  "-home-proj"
+
+  # Alpha writes and syncs
+  write_mem "$tdir" "alpha" "-home-proj" "notes.md" "alpha notes"
+  printf '# My Rules\n- Use TypeScript\n' > "$tdir/machines/alpha/home/.claude/CLAUDE.md"
+  sync_machine "$tdir" "alpha"
+
+  # Beta syncs (receives incoming)
+  sync_machine "$tdir" "beta"
+  # Second sync — reflects imported files in snapshot
+  sync_machine "$tdir" "beta"
+
+  local commits_before
+  commits_before=$(git -C "$tdir/machines/beta/home/.claude/brain-repo" rev-list --count HEAD)
+
+  # Third sync — should be fully stable
+  sync_machine "$tdir" "beta"
+
+  local commits_after
+  commits_after=$(git -C "$tdir/machines/beta/home/.claude/brain-repo" rev-list --count HEAD)
+
+  [ "$commits_before" = "$commits_after" ] || return 1
+}
+
+# IT-29: Pre-pull consolidated is used as 3-way ancestor. Alpha and beta
+# both modify different files after initial sync. Neither should conflict.
+test_3way_uses_prepull_baseline() {
+  local tdir
+  tdir=$(make_test_env "it29")
+  setup_machine "$tdir" "alpha" "a029"
+  setup_machine "$tdir" "beta"  "b029"
+
+  ensure_project "$tdir" "alpha" "-home-proj"
+  ensure_project "$tdir" "beta"  "-home-proj"
+
+  # Both start with same file
+  write_mem "$tdir" "alpha" "-home-proj" "shared.md" "initial content"
+  sync_machine "$tdir" "alpha"
+  sync_machine "$tdir" "beta"
+
+  # Alpha modifies the shared file
+  write_mem "$tdir" "alpha" "-home-proj" "shared.md" "alpha updated"
+  sync_machine "$tdir" "alpha"
+
+  # Beta adds a new file (doesn't touch shared.md)
+  write_mem "$tdir" "beta" "-home-proj" "beta-new.md" "beta new file"
+  sync_machine "$tdir" "beta"
+
+  # Beta should have alpha's updated shared.md AND its own new file, no conflict
+  [ "$(conflict_count "$tdir" "beta")" -eq 0 ] || return 1
+  read_mem "$tdir" "beta" "-home-proj" "shared.md" | grep -q "alpha updated" || return 1
+  has_mem "$tdir" "beta" "-home-proj" "beta-new.md" || return 1
+}
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 echo ""
 echo "=== claude-brain Integration Tests ==="
@@ -1532,7 +1599,7 @@ run_test test_3way_outgoing_only
 run_test test_3way_incoming_only
 run_test test_3way_real_conflict
 run_test test_3way_fallback_to_2way
-run_test test_baseline_saved_after_apply
+run_test test_no_spurious_commits_after_stabilize
 
 echo ""
 echo "--- Rules, skills, settings, MCP tests ---"
@@ -1543,6 +1610,8 @@ run_test test_3way_claude_md_outgoing
 run_test test_project_not_on_machine_preserved
 run_test test_double_apply_idempotent
 run_test test_outgoing_push_propagates
+run_test test_no_hash_mismatch_after_merge
+run_test test_3way_uses_prepull_baseline
 
 echo ""
 echo "--- Summary + safety tests ---"

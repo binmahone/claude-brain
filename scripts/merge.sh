@@ -35,6 +35,12 @@ if [ ! -f "$BASE" ] || [ ! -f "$OTHER" ]; then
   exit 1
 fi
 
+# Compute sha256 hash for a content string, matching export.sh format.
+# printf '%s\n' adds trailing newline to match jq -Rs (export reads files that way).
+content_hash() {
+  printf '%s\n' "$1" | compute_hash
+}
+
 THREE_WAY=false
 if [ -n "$ANCESTOR" ] && [ -f "$ANCESTOR" ]; then
   THREE_WAY=true
@@ -241,9 +247,10 @@ if [ -n "$oc" ] && [ "$bc" != "$oc" ]; then
       mc="$bc"
     fi
   fi
+  mc_hash=$(content_hash "$mc")
   tmp=$(brain_mktemp)
-  jq --arg c "$mc" \
-    '.declarative.claude_md.content = $c | .declarative.claude_md.hash = "merged"' \
+  jq --arg c "$mc" --arg h "sha256:${mc_hash}" \
+    '.declarative.claude_md.content = $c | .declarative.claude_md.hash = $h' \
     "$OUTPUT" > "$tmp" && mv "$tmp" "$OUTPUT"
 fi
 
@@ -430,17 +437,19 @@ if [ "$(echo "$final_groups" | jq 'length')" -gt 0 ]; then
         for m in "${existing[@]}"; do
           echo "$cur_mem" | jq -e --arg m "$m" --arg f "$fname" \
             '.[$m] | has($f)' > /dev/null 2>&1 && continue
+          gs_hash=$(content_hash "$ref")
           cur_mem=$(echo "$cur_mem" | jq \
-            --arg m "$m" --arg f "$fname" --arg c "$ref" \
-            '.[$m][$f] = {content: $c, hash: "group-synced"}')
+            --arg m "$m" --arg f "$fname" --arg c "$ref" --arg h "sha256:${gs_hash}" \
+            '.[$m][$f] = {content: $c, hash: $h}')
         done
       else
         record_conflict "group/${gname}" "$fname" "${contents[0]}" "${contents[1]}"
         mc="${contents[0]}"
         for m in "${existing[@]}"; do
+          cp_hash=$(content_hash "$mc")
           cur_mem=$(echo "$cur_mem" | jq \
-            --arg m "$m" --arg f "$fname" --arg c "$mc" \
-            '.[$m][$f] = {content: $c, hash: "conflict-pending"}')
+            --arg m "$m" --arg f "$fname" --arg c "$mc" --arg h "sha256:${cp_hash}" \
+            '.[$m][$f] = {content: $c, hash: $h}')
         done
       fi
     done <<< "$all_fnames"
